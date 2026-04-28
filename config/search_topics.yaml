@@ -1,0 +1,46 @@
+openclaw_tavily_search:
+  enabled: true
+  skill_name: tavily-search
+  max_items_per_topic: 5
+  recency_days: 3
+  fallback_recency_days: 3
+  timeout_seconds: 20
+  topics:
+    - id: ai_frontier_technology
+      name: "AI 前沿技术"
+      query: "latest AI model release multimodal reasoning inference benchmark"
+      domains:
+        - openai.com
+        - anthropic.com
+        - deepmind.google
+        - ai.meta.com
+        - huggingface.co
+        - arxiv.org
+
+    - id: ai_agent_open_source
+      name: "AI Agent 与开源工具"
+      query: "AI agent MCP coding agent open source GitHub Hacker News"
+      domains:
+        - github.com
+        - news.ycombinator.com
+        - huggingface.co
+
+    - id: ai_business_adoption
+      name: "AI 商业化与企业采用"
+      query: "AI enterprise adoption cloud software earnings customer demand"
+      domains:
+        - reuters.com
+        - bloomberg.com
+        - cnbc.com
+        - ft.com
+        - wsj.com
+
+    - id: ai_startup_product_funding
+      name: "AI 创业融资与产品发布"
+      query: "AI startup funding product launch acquisition enterprise software"
+      domains:
+        - reuters.com
+        - bloomberg.com
+        - cnbc.com
+        - techcrunch.com
+        - theverge.com

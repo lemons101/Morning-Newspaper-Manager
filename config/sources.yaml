@@ -1,0 +1,117 @@
+fixed_sources:
+  - id: github_high_stars
+    type: github_high_stars
+    enabled: true
+    name: GitHub 高星项目
+    max_items: 5
+    endpoint: "https://api.github.com/search/repositories"
+    auth_env: GITHUB_TOKEN
+    since_days: 7
+    min_stars: 80
+    languages:
+      - Python
+      - TypeScript
+      - Go
+      - Rust
+    extra_queries:
+      - "topic:ai"
+      - "topic:agent"
+
+  - id: hackernews_top
+    type: hackernews_top
+    enabled: true
+    name: Hacker News 热门故事
+    max_items: 5
+    endpoint: "https://hacker-news.firebaseio.com/v0"
+    stories_type: topstories
+    max_stories: 20
+    timeout_seconds: 15
+
+  - id: github_security_advisories
+    type: github_advisory
+    enabled: true
+    name: GitHub 安全公告
+    max_items: 5
+    endpoint: "https://api.github.com/advisories"
+    auth_env: GITHUB_TOKEN
+    per_page: 20
+    timeout_seconds: 20
+
+  - id: sec_press_releases
+    type: rss
+    enabled: true
+    name: SEC 新闻稿
+    max_items: 5
+    url: "https://www.sec.gov/news/pressreleases.rss"
+
+  - id: fed_press_all
+    type: rss
+    enabled: true
+    name: 美联储新闻稿
+    max_items: 5
+    url: "https://www.federalreserve.gov/feeds/press_all.xml"
+
+  - id: fed_press_monetary
+    type: rss
+    enabled: true
+    name: 美联储货币政策
+    max_items: 5
+    url: "https://www.federalreserve.gov/feeds/press_monetary.xml"
+
+  - id: executive_mailbox
+    type: mail_alerts
+    enabled: true
+    name: 重要邮箱告警
+    max_items: 5
+    host: "imap.163.com"
+    port: 993
+    pop_host: "pop.163.com"
+    pop_port: 995
+    pop3_fallback_enabled: true
+    user_env: IMAP_USER
+    pass_env: IMAP_PASS
+    folders:
+      - INBOX
+    max_messages: 50
+    lookback_hours: 72
+    initial_backfill_hours: 336
+    event_queue_file: mail_event_queue.json
+    event_emit_window_days: 0
+    urgent_keywords:
+      - urgent
+      - asap
+      - immediate
+      - security incident
+      - production down
+      - payment failed
+      - legal notice
+      - breach
+      - 紧急
+      - 立即处理
+      - 尽快
+      - 服务中断
+      - 付款失败
+      - 法律函
+      - 律师函
+      - 安全事件
+      - 数据泄露
+    important_keywords:
+      - important
+      - deadline
+      - invoice
+      - contract
+      - review needed
+      - action required
+      - meeting
+      - appointment
+      - due
+      - reminder
+      - 会议
+      - 开会
+      - 截止
+      - 到期
+      - 提醒
+      - 发票
+      - 合同
+      - 审批
+      - 需要处理
