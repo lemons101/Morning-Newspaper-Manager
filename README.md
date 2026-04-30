@@ -305,8 +305,6 @@ export GITHUB_TOKEN="your_github_token"
 
 ## 7. Tavily / Web Search skill 怎么安装
 
-这部分也不要写虚的，直接按当前 OpenClaw skill 体系来。
-
 ### 7.1 先确认 OpenClaw 可用
 
 ```bash
