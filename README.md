@@ -116,16 +116,26 @@ source .venv/bin/activate
 如果你不想用虚拟环境，也至少保证系统 `python3` 可用。
 
 ### 4.2 安装依赖
-当前仓库里**没有现成的 `requirements.txt` / `pyproject.toml`**，所以这一步要按现有运行环境补齐依赖。
+当前仓库已经补了一个基础 `requirements.txt`，先按它安装：
 
-最低限度先验证：
+```bash
+pip install -r requirements.txt
+```
+
+当前这个文件优先覆盖项目主链和旧动态 dashboard 入口所需的基础依赖，包括：
+
+- `PyYAML`
+- `requests`
+- `streamlit`
+
+安装后先做最小验证：
 
 ```bash
 python3 --version
-python3 -c "import yaml, requests"
+python3 -c "import yaml, requests, streamlit"
 ```
 
-如果这里失败，先装依赖，不要先改业务逻辑。
+如果这里失败，先修依赖，不要先改业务逻辑。
 
 ### 4.3 最小可运行验证
 建议先跑下面三步：
@@ -449,11 +459,12 @@ git clone <your-repo-url>
 cd Morning-Newspaper-Manager
 ```
 
-### 9.2 创建环境
+### 9.2 创建环境并安装依赖
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
+pip install -r requirements.txt
 ```
 
 ### 9.3 准备环境变量
