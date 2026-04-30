@@ -158,6 +158,10 @@ def _message_to_alert_and_event(source: Dict[str, Any], blob: bytes) -> Tuple[Co
 
     subject = _decode_mime_header(message.get("Subject")) or "(no subject)"
     sender = _decode_mime_header(message.get("From"))
+    sender_lower = sender.lower()
+    subject_lower = subject.lower()
+    if _is_ignored_sender(source, sender_lower) or _is_ignored_subject(source, subject_lower):
+        return None, None
     message_id = _decode_mime_header(message.get("Message-ID"))
     body = _extract_text_body(message)
     action = _detect_action(source, subject=subject, body=body)
@@ -255,6 +259,11 @@ def _classify_mail(
     urgent_keywords = _string_list(source.get("urgent_keywords", []))
     important_keywords = _string_list(source.get("important_keywords", []))
 
+    if _is_ignored_sender(source, sender_lower):
+        return "FYI", "ignored sender"
+    if _is_ignored_subject(source, subject.lower()):
+        return "FYI", "ignored subject"
+
     for vip in vip_senders:
         if vip and vip in sender_lower:
             return "Urgent", f"vip sender: {vip}"
@@ -280,6 +289,16 @@ def _first_hit(text: str, candidates: Iterable[str]) -> str:
         if candidate and candidate in text:
             return candidate
     return ""
+
+
+def _is_ignored_sender(source: Dict[str, Any], sender_lower: str) -> bool:
+    ignored_senders = _string_list(source.get("ignored_senders", []))
+    return any(item and item in sender_lower for item in ignored_senders)
+
+
+def _is_ignored_subject(source: Dict[str, Any], subject_lower: str) -> bool:
+    ignored_subject_keywords = _string_list(source.get("ignored_subject_keywords", []))
+    return any(item and item in subject_lower for item in ignored_subject_keywords)
 
 
 def _detect_action_timing(source: Dict[str, Any], *, subject: str, body: str) -> str:

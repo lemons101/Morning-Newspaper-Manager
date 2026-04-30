@@ -9,12 +9,15 @@ from src.models import CollectedItem, item_from_fields, utc_now_iso
 
 
 def collect_openclaw_tavily(config: Dict[str, Any], *, root: Path, runtime_config: Dict[str, Any]) -> List[CollectedItem]:
+    print("[采集开始] tavily results")
     plan = build_tavily_search_plan(config)
     runtime_dir = root / str(runtime_config.get("output_dir", "runtime"))
     plan_path = runtime_dir / str(runtime_config.get("tavily_search_plan_file", "tavily_search_plan.json"))
     results_path = runtime_dir / str(runtime_config.get("tavily_search_results_file", "tavily_search_results.json"))
     write_tavily_search_plan(plan, plan_path)
-    return read_tavily_search_results(results_path)
+    items = read_tavily_search_results(results_path)
+    print(f"[采集完成] tavily results items={len(items)}")
+    return items
 
 
 def build_tavily_topic_plan(config: Dict[str, Any]) -> List[Dict[str, Any]]:

@@ -30,13 +30,17 @@ def collect_fixed_platforms(
 ) -> List[CollectedItem]:
     items: List[CollectedItem] = []
     for source in build_fixed_source_plan(config):
+        source_id = str(source.get("id", "")).strip() or "(unknown)"
         source_type = str(source.get("type", "")).strip()
+        print(f"[采集开始] fixed source id={source_id} type={source_type}")
         fetcher = _fetcher_for_type(source_type, root=root, runtime_config=runtime_config or {})
         if fetcher is None:
             print(f"[WARN] unsupported fixed source type={source_type} id={source.get('id')}")
             continue
         try:
-            items.extend(fetcher(source))
+            fetched = fetcher(source)
+            items.extend(fetched)
+            print(f"[采集完成] fixed source id={source_id} type={source_type} items={len(fetched)}")
         except Exception as exc:
             print(f"[WARN] fixed source failed id={source.get('id')} type={source_type}: {exc}")
     return items

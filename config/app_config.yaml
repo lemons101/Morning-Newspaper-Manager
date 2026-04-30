@@ -1,7 +1,6 @@
 app:
   timezone: Asia/Shanghai
   default_item_limit: 5
-
 runtime:
   output_dir: runtime
   collected_items_file: collected_items.json
@@ -15,28 +14,25 @@ runtime:
   search_report_file: search_report.json
   tavily_search_plan_file: tavily_search_plan.json
   tavily_search_results_file: tavily_search_results.json
-
 triage:
   top_n: 10
-  candidate_limit: 25
+  candidate_limit: 15
   thresholds:
     urgent_min: 80
     important_min: 50
-  low_confidence_threshold: 0.60
-
+  low_confidence_threshold: 0.6
 enrichment:
-  enabled: true
+  enabled: false
   max_link_previews: 10
   timeout_seconds: 8
-
 openclaw:
-  skill_run_command: "openclaw skills run"
-
+  skill_run_command: openclaw skills run
+  ai_triage_enabled: true
 dashboard:
   enabled: true
-  host: "127.0.0.1"
+  host: 127.0.0.1
   port: 8502
   port_search_limit: 10
-  app_file: "dashboard_app.py"
-  static_file: "dashboard.html"
+  app_file: dashboard_app.py
+  static_file: dashboard.html
   startup_timeout_seconds: 25
