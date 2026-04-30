@@ -25,8 +25,10 @@ def main() -> None:
     data = build_dashboard_payload(root / "runtime")
     overview = data["overview"]
 
-    st.title("今日 AI 早报")
+    st.title(data.get("headline") or "今日 AI 早报")
     st.caption(f"聚焦近 3 天 AI 技术与商业信号 · 更新时间：{data['generated_at']}")
+    if data.get("lead"):
+        st.markdown(data["lead"])
 
     cols = st.columns(6)
     cols[0].metric("今日采集", overview["collected_total"])
@@ -38,10 +40,10 @@ def main() -> None:
 
     left, right = st.columns([2.2, 1], gap="large")
     with left:
-        st.subheader("Top10 资讯")
+        st.subheader("Top10")
         top_items = data.get("top_items", [])
         if not top_items:
-            st.info("暂无 Top10 资讯")
+            st.info("暂无 Top10 内容")
         for item in top_items:
             _render_item(item)
 
@@ -69,6 +71,10 @@ def _render_item(item: dict, compact: bool = False) -> None:
     title_en = item.get("title_en", "")
     source = item.get("source_name", "-")
     summary = item.get("summary_zh") or item.get("summary", "")
+    key_points = item.get("key_points") or []
+    why_it_matters = item.get("why_it_matters", "")
+    summary_basis = item.get("summary_basis", "")
+    summary_confidence = item.get("summary_confidence", "")
     published_at = item.get("published_at", "")
     url = item.get("url", "")
 
@@ -89,7 +95,18 @@ def _render_item(item: dict, compact: bool = False) -> None:
         st.caption(f"英文原题：{title_en}")
     if summary:
         st.markdown(f"**主要内容：** {summary}")
-    st.caption(f"来源：{source}" + (f" · 发布时间：{published_at}" if published_at else ""))
+    if key_points:
+        st.markdown("**关键信息：**")
+        for point in key_points[:3]:
+            st.markdown(f"- {point}")
+    meta_bits = [f"来源：{source}"]
+    if published_at:
+        meta_bits.append(f"发布时间：{published_at}")
+    if summary_basis:
+        meta_bits.append(f"摘要依据：{summary_basis}")
+    if summary_confidence:
+        meta_bits.append(f"可信度：{summary_confidence}")
+    st.caption(" · ".join(meta_bits))
     if url and not url.startswith("mail:"):
         st.link_button("访问链接", url)
     elif compact:

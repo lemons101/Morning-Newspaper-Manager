@@ -1,100 +1,205 @@
-# Information Collector 任务流
+# Morning-Newspaper-Manager 任务流
 
 ## 目标
 
-构建一个可复用的信息采集层：围绕 AI 最新技术、AI Agent、AI 商业化和企业采用信号，从固定平台、OpenClaw/Tavily 搜索和邮箱告警中收集信息碎片，统一输出干净 JSON，供后续早报、看板和分诊使用。
+把 AI 技术、AI Agent、开源工具、安全与商业信号，稳定地从多来源采集回来，经过分诊、候选池收敛、Top10 选择、正文增强和编辑整理，最终输出成可分享的中文晨报页面。
 
-## 端到端流程
+---
 
-```mermaid
-flowchart TD
-    A[启动采集任务] --> B[读取应用配置]
-    B --> C[读取固定信息源]
-    B --> D[读取 Tavily 搜索主题]
+## 当前真实链路
 
-    C --> E[固定平台通道]
-    E --> E1[GitHub 高星项目: 5 条]
-    E --> E2[Hacker News: 5 条]
-    E --> E3[GitHub 安全公告: 5 条]
-    E --> E4[SEC RSS: 5 条]
-    E --> E5[美联储 RSS: 5 条]
-    E --> E6[邮箱告警: 5 条]
-
-    D --> F[生成 Tavily 搜索计划]
-    F --> F1[写入 tavily_search_plan.json]
-    F1 --> F2[OpenClaw 调用 tavily-search skill]
-    F2 --> F3[写回 tavily_search_results.json]
-    F3 --> F4[Collector 合并搜索结果]
-
-    E1 --> G[合并原始信息]
-    E2 --> G
-    E3 --> G
-    E4 --> G
-    E5 --> G
-    E6 --> G
-    F4 --> G
-
-    G --> H[统一字段格式]
-    H --> I[按 URL 和标题去重]
-    I --> J[写入 collected_items.json]
-    I --> K[三级分诊 Urgent/Important/FYI]
-    K --> L[初筛 25 条非邮件候选]
-    L --> L1[生成 triage_candidates.json]
-    L1 --> L2[大模型从候选池选择 Top10]
-    L2 --> M[生成 top10_items.json]
-    K --> N[生成 mail_alerts.json]
-    M --> O[生成可视化看板]
-    N --> O
+```text
+来源采集
+  -> 去重与 triage
+  -> triage_candidates
+  -> top10_items
+  -> top10_enriched_items
+  -> top10_editorial_ready
+  -> final_newspaper
+  -> dashboard.html
+  -> 8510 固定链接
+  -> 每日自动更新 / 每日推送
 ```
 
-## 三条采集通道
+---
 
-### 固定平台通道
+## 分层理解
 
-这条通道是确定性的。我们显式维护信息源列表、凭据和每个来源的上限。
+### 1. 采集层
+负责把信息采回来并统一成结构化条目。
 
-默认固定来源：
+包括：
 
-- GitHub 高星项目搜索
-- GitHub Security Advisories API
-- Hacker News Top Stories
-- SEC Press Releases RSS
-- Federal Reserve RSS
-- 邮箱紧急和重要告警
+- GitHub 高星项目
+- GitHub 安全公告
+- Hacker News 热门故事
+- RSS 来源
+- 邮件告警
+- Tavily 搜索计划 / 搜索结果回填
 
-每个启用来源默认最多保留 5 条。
+输出重点：
 
-### OpenClaw 搜索通道
+- `collected_items.json`
+- `normalized_items.json`
 
-这条通道是探索性的。OpenClaw 根据配置主题调用 `tavily-search` skill，并结合域名提示搜索 AI 前沿技术、AI Agent、开源工具、商业化和融资产品信息。
+### 2. 分诊层
+负责把信息从“原始条目”收敛成更值得看的候选。
 
-每个主题默认最多保留 5 条。
+包括：
 
-Python 采集器不直接调用 Tavily API。它只负责生成 `runtime/tavily_search_plan.json`，并读取 OpenClaw 回填的 `runtime/tavily_search_results.json`。
+- 去重
+- triage（Urgent / Important / FYI）
+- 候选池选择
+- Top10 选择
 
-### 邮件告警通道
+输出重点：
 
-邮箱只输出命中紧急或重要关键词的邮件，不占用 25 条初筛候选名额，也不占用 Top10 资讯名额，而是在看板中单独展示。
+- `triage_items.json`
+- `triage_candidates.json`
+- `top10_items.json`
 
-邮箱未来事项采用队列结构：新邮件中识别出的会议、截止、审批和提醒会写入 `runtime/mail_event_queue.json`。早报每天只输出当天到期的队列事项；未来事项先保留，过期事项自动丢弃，避免每天重复展示同一封旧邮件。
+### 3. 内容增强层
+负责把 Top10 从短条目变成更接近可写稿素材的内容。
 
-## 分诊与 Top10 选择
+包括：
 
-分诊分成两层：
+- 正文抓取
+- link preview
+- 内容清洗
+- 编辑提示生成
 
-1. 规则初筛：根据优先级、影响分、置信度和发布时间，从非邮件资讯中选出 25 条候选，写入 `runtime/triage_candidates.json`。
-2. 大模型精选：后续由 OpenClaw/大模型阅读这 25 条候选，结合 AI 技术价值、商业信号强度、新鲜度和行动价值，选出最终 Top10。
+输出重点：
 
-当前版本的大模型精选位暂时使用规则排序兜底，所以 `runtime/top10_items.json` 一定来自 25 条候选池。
+- `top10_enriched_items.json`
+- `top10_editorial_ready.json`
 
-## 当前版本已实现
+### 4. 成稿与展示层
+负责把编辑素材包变成最终对用户可见的晨报。
 
-- 多来源采集
-- 统一字段结构
-- 基础去重
-- Urgent / Important / FYI 三级分诊
-- 25 条候选池初筛
-- Top10 资讯筛选
-- 邮件告警拆分
-- Streamlit 动态看板
-- 静态 HTML 看板兜底
+包括：
+
+- 生成 `final_newspaper.json`
+- 生成 `final_newspaper.md`
+- 生成 `runtime/dashboard.html`
+- 静态页面展示
+- 8510 固定访问链接
+
+---
+
+## 详细任务流
+
+### Step 1：读取配置
+读取：
+
+- `config/app_config.yaml`
+- `config/sources.yaml`
+- `config/search_topics.yaml`
+
+### Step 2：固定来源采集
+拉取配置好的固定平台来源。
+
+### Step 3：Tavily 搜索计划与结果回填
+Collector 本身不直接调用 Tavily API，而是：
+
+1. 生成 `runtime/tavily_search_plan.json`
+2. 由 OpenClaw / skill 完成搜索
+3. 写回 `runtime/tavily_search_results.json`
+4. Collector 再合并回主流程
+
+### Step 4：原始条目合并
+把固定来源、搜索结果、邮件信号汇总成统一条目流。
+
+### Step 5：link preview 与基础增强
+为部分条目补充页面基础信息。
+
+### Step 6：去重
+根据 URL、标题等进行去重。
+
+### Step 7：triage
+把条目分成：
+
+- `Urgent`
+- `Important`
+- `FYI`
+
+### Step 8：候选池选择
+从非邮件条目中选出 `triage_candidates`。
+
+### Step 9：Top10 生成
+基于候选池生成 `top10_items.json`。
+
+### Step 10：正文增强
+对 Top10 做正文抓取、清洗和内容增强。
+
+输出：
+
+- `top10_enriched_items.json`
+
+### Step 11：editorial-ready 生成
+将增强后的内容进一步整理成适合成稿和页面展示的素材包。
+
+输出：
+
+- `top10_editorial_ready.json`
+
+这是当前最关键的中间层。
+
+### Step 12：最终晨报生成
+从 editorial-ready 素材生成：
+
+- `final_newspaper.json`
+- `final_newspaper.md`
+- `runtime/dashboard.html`
+
+### Step 13：展示与分享
+通过固定链接访问：
+
+- `http://101.47.152.44:8510/dashboard.html`
+
+---
+
+## 自动化链路
+
+### 每日 08:00
+自动重跑晨报链，更新当天 HTML。
+
+### 每日 08:05
+自动推送：
+
+- 今日晨报已更新
+- 3 条今日看点
+- 固定链接
+
+---
+
+## 当前关键设计判断
+
+### 1. `top10_editorial_ready.json` 是中间核心
+它是连接采集结果和成品展示的桥。
+
+### 2. 静态 HTML 是当前主交付物
+如果目标是“让用户看晨报”，当前优先交付：
+
+- `runtime/dashboard.html`
+
+### 3. 当前不是历史归档系统
+当前链路会按天覆盖当天内容，而不是保留每日历史快照。
+
+---
+
+## 推荐排查顺序
+
+如果页面内容不对，建议按顺序排查：
+
+1. `top10_items.json`
+2. `top10_enriched_items.json`
+3. `top10_editorial_ready.json`
+4. `final_newspaper.json`
+5. `runtime/dashboard.html`
+
+这样可以快速判断问题是在：
+
+- Top10 选择层
+- 正文增强层
+- editorial-ready 层
+- 展示层

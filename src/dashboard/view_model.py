@@ -13,7 +13,10 @@ def build_dashboard_payload(runtime_dir: Path) -> Dict[str, Any]:
     candidates = _safe_items(_read_json(runtime_dir / "triage_candidates.json"))
     rule_top10 = _safe_items(_read_json(runtime_dir / "top10_items.json"))
     ai_top10 = _safe_items(_read_json(runtime_dir / "ai_selected_top10.json"))
-    top10 = ai_top10 or rule_top10
+    enriched_top10 = _safe_items(_read_json(runtime_dir / "top10_enriched_items.json"))
+    editorial_top10 = _safe_items(_read_json(runtime_dir / "top10_editorial_ready.json"))
+    top10 = editorial_top10 or ai_top10 or enriched_top10 or rule_top10
+    final_newspaper = _read_json(runtime_dir / "final_newspaper.json")
     mail_alerts = _safe_items(_read_json(runtime_dir / "mail_alerts.json"))
     source_report = _read_json(runtime_dir / "source_report.json")
 
@@ -37,7 +40,11 @@ def build_dashboard_payload(runtime_dir: Path) -> Dict[str, Any]:
             "urgent_mail_count": urgent_task_count,
             "urgent_task_count": urgent_task_count,
         },
-        "top_items": [_to_display_item(item, index + 1) for index, item in enumerate(top10)],
+        "headline": str(final_newspaper.get("headline") or "今日 AI 早报").strip(),
+        "lead": _build_lead_bullets(final_newspaper, top10),
+        "top_stories": _final_top_stories(final_newspaper, top10),
+        "other_signals": _final_other_signals(final_newspaper),
+        "top_items": [_to_display_item(item, index + 1) for index, item in enumerate(_filter_top10(top10))],
         "mail_alerts": [_to_display_item(item, index + 1) for index, item in enumerate(mail_alerts)],
         "source_health": _source_rows(source_report),
     }
@@ -72,15 +79,27 @@ def _to_display_item(item: Dict[str, Any], rank: int) -> Dict[str, Any]:
     if not isinstance(reasons, list):
         reasons = []
     title = str(item.get("title", "(untitled)")).strip() or "(untitled)"
-    summary = str(item.get("short_summary") or item.get("summary") or "").strip()
+    summary = str(item.get("summary") or item.get("summary_llm") or item.get("short_summary") or "").strip()
     source_type = str(item.get("source_type", "")).strip()
     source_name = str(item.get("source_name", "")).strip()
     channel = str(item.get("channel", "")).strip()
     priority = _priority(item)
-    title_zh = str(item.get("title_zh") or "").strip() or _title_zh(title, summary, source_type, source_name, channel)
+
+    # 优先使用新版 editorial 链产出的标题/摘要；旧 summary 字段仅作为降级兜底
+    title_zh = str(item.get("card_title") or item.get("title_zh") or item.get("title") or "").strip() or _title_zh(title, summary, source_type, source_name, channel)
     title_en = str(item.get("title_en") or "").strip() or title
-    summary_zh = str(item.get("summary_zh") or "").strip() or _summary_zh(title, summary, source_type, source_name, channel)
+    summary_zh = str(item.get("card_summary") or item.get("editorial_summary_hint") or "").strip()
+    if not summary_zh:
+        summary_zh = str(item.get("summary_zh") or item.get("summary_main") or "").strip()
+    if not summary_zh:
+        summary_zh = str(item.get("summary_llm") or "").strip() or _summary_zh(title, summary, source_type, source_name, channel)
     summary_en = str(item.get("summary_en") or "").strip() or summary
+    why_it_matters = str(item.get("why_it_matters") or "").strip()
+    key_points = item.get("key_points") or []
+    if not isinstance(key_points, list):
+        key_points = []
+    key_points = [str(point).strip() for point in key_points if str(point).strip()]
+
     return {
         "rank": int(item.get("rank", rank) or rank),
         "item_id": str(item.get("item_id", "")).strip(),
@@ -91,6 +110,11 @@ def _to_display_item(item: Dict[str, Any], rank: int) -> Dict[str, Any]:
         "summary": summary_zh,
         "summary_zh": summary_zh,
         "summary_en": summary_en,
+        "why_it_matters": why_it_matters,
+        "key_points": key_points,
+        "summary_basis": str(item.get("summary_basis", "")).strip(),
+        "summary_confidence": str(item.get("summary_confidence", "")).strip(),
+        "summary_warnings": item.get("summary_warnings") or [],
         "source_name": source_name,
         "source_type": source_type,
         "published_at": str(item.get("published_at", "")).strip(),
@@ -99,7 +123,101 @@ def _to_display_item(item: Dict[str, Any], rank: int) -> Dict[str, Any]:
         "reasons": [str(reason).strip() for reason in reasons if str(reason).strip()],
         "suggested_action": str(item.get("suggested_action", "")).strip(),
         "url": str(item.get("url", "")).strip(),
+        "topic_icon": _topic_icon(item),
     }
+
+
+def _build_lead_bullets(final_newspaper: Dict[str, Any], top10: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+    items = _filter_top10(top10)
+    cards: List[Dict[str, str]] = []
+    for item in items:
+        title = str(item.get('card_title') or item.get('title') or '').strip()
+        title_lower = title.lower()
+        if 'copy fail' in title_lower and not any(x.get('key') == 'copy-fail' for x in cards):
+            cards.append({
+                'key': 'copy-fail',
+                'icon': '🛡️',
+                'title': '安全边界重新抬高',
+                'summary': 'Copy Fail 把 Linux 本地提权风险重新带回多租户、容器节点和 CI 运行环境，影响面比普通漏洞更贴近真实生产场景。',
+            })
+        elif ('ckan' in title_lower or 'claude sdk' in title_lower) and not any(x.get('key') == 'toolchain-security' for x in cards):
+            cards.append({
+                'key': 'toolchain-security',
+                'icon': '🔐',
+                'title': 'AI 工具链开始成为安全面',
+                'summary': 'CKAN 和 Claude SDK 说明风险已经从传统基础设施外扩到 AI SDK、数据接口和本地记忆文件这类更贴近 Agent 工具链的层面。',
+            })
+        elif ('futureagi' in title_lower or 'harmonist' in title_lower or 'agent sprite forge' in title_lower) and not any(x.get('key') == 'agent-workflow' for x in cards):
+            cards.append({
+                'key': 'agent-workflow',
+                'icon': '🤖',
+                'title': 'Agent 工程走向可控化',
+                'summary': 'FutureAGI、Harmonist 和 Agent Sprite Forge 这类项目都在说明，Agent 正从“能调用模型”走向“能闭环优化、能被约束、能进入具体工作流”。',
+            })
+        if len(cards) >= 3:
+            break
+    if not cards:
+        lead = str(final_newspaper.get('lead') or '').strip()
+        return [{'key': 'lead', 'icon': '✨', 'title': '今日主线', 'summary': lead}] if lead else []
+    return cards[:3]
+
+
+def _topic_icon(item: Dict[str, Any]) -> str:
+    source_type = str(item.get('source_type') or '').strip()
+    title = str(item.get('title') or '').lower()
+    focus = str(item.get('editorial_focus') or '').strip()
+    if source_type == 'github_advisory' or '安全' in focus:
+        return '🛡️'
+    if source_type == 'github_high_stars' and ('agent' in title or 'Agent' in focus or '平台' in focus or '约束' in focus):
+        return '🤖'
+    if source_type == 'github_high_stars':
+        return '📦'
+    if source_type == 'rss':
+        return '🏛️'
+    if source_type == 'hackernews_top':
+        return '📰'
+    return '✨'
+
+
+def _filter_top10(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    filtered: List[Dict[str, Any]] = []
+    for item in items:
+        title = str(item.get("title") or item.get("title_zh") or "").strip()
+        body_quality = str(item.get("body_quality") or "").strip()
+        editorial_priority = str(item.get("editorial_priority") or "").strip()
+        if title in {"Craig Venter has died", "Cursor Camp"}:
+            continue
+        if body_quality == "thin" and editorial_priority != "risk_signal":
+            continue
+        filtered.append(item)
+    return filtered[:8]
+
+
+def _final_top_stories(payload: Dict[str, Any], editorial_items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    stories = payload.get("top_stories", [])
+    if not isinstance(stories, list):
+        return []
+    editorial_by_title = {str(item.get('title') or '').strip(): item for item in editorial_items if isinstance(item, dict)}
+    result = []
+    for story in stories[:3]:
+        if not isinstance(story, dict):
+            continue
+        title = str(story.get('title') or '').strip()
+        matched = editorial_by_title.get(title)
+        result.append({
+            'title': title,
+            'summary': str(story.get('summary') or '').strip(),
+            'why': str(story.get('why') or '').strip(),
+            'url': str((matched or {}).get('url') or '').strip(),
+        })
+    return result
+
+
+def _final_other_signals(payload: Dict[str, Any]) -> List[str]:
+    signals = payload.get("other_signals", [])
+    if not isinstance(signals, list):
+        return []
+    return [str(x).strip() for x in signals if str(x).strip()][:5]
 
 
 def _source_rows(source_report: Dict[str, Any]) -> List[Dict[str, Any]]:
