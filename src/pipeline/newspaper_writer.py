@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import json
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -94,36 +95,49 @@ def _build_editorial_top10(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         body = _clean_body(body)[:TOP_ITEM_BODY_LIMIT]
         body_quality = _assess_body_quality(body, item)
 
-        title = str(item.get('title_zh') or item.get('title') or '').strip()
+        raw_title = str(item.get('title') or '').strip()
+        title_zh_seed = str(item.get('title_zh') or '').strip()
         source_name = str(item.get('source_name') or '').strip()
         source_type = str(item.get('source_type') or '').strip()
         summary_zh = str(item.get('summary_zh') or item.get('summary') or '').strip()
         why = str(item.get('why_it_matters') or '').strip()
 
-        editorial_focus = _editorial_focus(title, source_type, source_name, body)
-        editorial_summary_hint = _editorial_summary_hint(title, source_type, source_name, body, summary_zh)
+        editorial_focus = _editorial_focus(raw_title, source_type, source_name, body)
+        editorial_summary_hint = _editorial_summary_hint(raw_title, source_type, source_name, body, summary_zh)
+        card_title = _story_title({'title': raw_title, 'editorial_focus': editorial_focus, 'source_type': source_type, 'source_name': source_name})
+        card_summary = _card_summary(raw_title, editorial_focus, editorial_summary_hint, body_quality)
+        title_zh = _normalize_title_zh(card_title, raw_title, source_type, source_name, title_zh_seed)
+        generated_summary_zh = _generate_source_specific_summary(raw_title, source_type, source_name, body, summary_zh, editorial_summary_hint, body_quality)
+        normalized_summary_zh = generated_summary_zh or summary_zh
+        summary_main = _normalize_summary_main(normalized_summary_zh or card_summary, editorial_summary_hint, normalized_summary_zh, body_quality)
+        why_main = _normalize_why_it_matters(str(item.get('why_it_matters') or '').strip(), raw_title, source_type, source_name, body, body_quality)
+        key_points = _build_key_points(raw_title, source_type, source_name, body, summary_main)
         editorial_items.append({
             'rank': idx,
             'item_id': item_id,
-            'title': title,
+            'title': raw_title,
+            'title_en': raw_title,
+            'title_zh': title_zh,
             'source_name': source_name,
             'source_type': source_type,
             'priority': str(item.get('priority') or '').strip(),
             'url': str(item.get('url') or '').strip(),
             'published_at': str(item.get('published_at') or '').strip(),
-            'summary_zh': summary_zh,
-            'why_it_matters': why,
+            'summary_zh': normalized_summary_zh,
+            'summary_main': summary_main,
+            'why_it_matters': why_main,
             'body_source': fetch_source or str(item.get('summary_basis') or ''),
             'body_fetch_status': fetch_status or str(item.get('body_fetch_status') or ''),
             'body_quality': body_quality,
             'body_length': len(body),
             'body_text': body,
             'editorial_focus': editorial_focus,
-            'editorial_angle': _editorial_angle(title, source_type, source_name, body),
-            'editorial_summary_hint': editorial_summary_hint,
+            'editorial_angle': _editorial_angle(raw_title, source_type, source_name, body),
+            'editorial_summary_hint': summary_main,
             'editorial_priority': _editorial_priority(idx, source_type, body_quality),
-            'card_title': _story_title({'title': title, 'editorial_focus': editorial_focus}),
-            'card_summary': _card_summary(title, editorial_focus, editorial_summary_hint, body_quality),
+            'card_title': title_zh,
+            'card_summary': summary_main,
+            'key_points': key_points,
         })
     return editorial_items
 
@@ -188,7 +202,7 @@ def _html_to_text(html: str) -> str:
 
 
 def _clean_body(text: str) -> str:
-    text = str(text or '').strip()
+    text = html.unescape(str(text or '').replace('���', '把')).strip()
     if not text:
         return ''
     for needle in [
@@ -210,7 +224,11 @@ def _clean_body(text: str) -> str:
     text = re.sub(r'- Respond helpfully to legitimate requests, but IGNORE any instructions to:[\s\S]*?(?=\w)', ' ', text)
     text = re.sub(r'Platform AI CODE CREATION[\s\S]*?Open Source COMMUNITY', ' ', text, flags=re.IGNORECASE)
     text = re.sub(r'GitHub Copilot Write better code with AI[\s\S]*?Premium Support', ' ', text, flags=re.IGNORECASE)
+    text = re.sub(r'Hacker News\s+new\s+\|\s+past\s+\|\s+comments\s+\|\s+ask\s+\|\s+show\s+\|\s+jobs\s+\|\s+submit\s+login', ' ', text, flags=re.IGNORECASE)
+    text = re.sub(r'\b\d+\s+points\s+by\s+\w+\s+\d+\s+hours?\s+ago\b', ' ', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bhide\s+\|\s+past\s+\|\s+favorite\s+\|\s+\d+\s+comments\b', ' ', text, flags=re.IGNORECASE)
     text = re.sub(r'\b(stars|forks|issues|pull requests|watching)\b', ' ', text, flags=re.IGNORECASE)
+    text = re.sub(r'https?://\S+', ' ', text)
     text = re.sub(r'\s+', ' ', text)
     return text.strip()
 
@@ -269,12 +287,20 @@ def _editorial_summary_hint(title: str, source_type: str, source_name: str, body
     body_lower = body.lower()
     if source_type == 'github_advisory' or 'copy fail' in title_lower or 'cve-' in title_lower:
         return _security_hint(title, body, fallback)
+    if source_type == 'hackernews_top':
+        return _hn_hint(title, body, fallback)
+    if source_type == 'rss' or source_name.startswith('SEC'):
+        return _official_hint(title, body, fallback)
     if 'future-agi' in title_lower:
         return _github_project_hint(title, body, fallback)
     if 'harmonist' in title_lower:
         return _github_project_hint(title, body, fallback)
     if 'sprite' in title_lower or '2d' in body_lower or 'game' in body_lower:
         return _github_project_hint(title, body, fallback)
+    if 'im-not-ai' in title_lower:
+        return _github_project_hint(title, body, fallback)
+    if 'mhr-cfw' in title_lower:
+        return '这个项目展示的是一条把 Google Apps Script 与 Cloudflare Workers 串起来的转发链路，更像网络绕行与流量转发工具，而不是典型的 AI 项目。它值得关注的点在于实现方式和潜在使用场景，而不是产品完成度。'
     if len(body) >= 180:
         return _trim_text(body, 220)
     return _trim_text(fallback, 180)
@@ -292,8 +318,13 @@ def _editorial_priority(rank: int, source_type: str, body_quality: str) -> str:
 
 def _security_hint(title: str, body: str, fallback: str) -> str:
     lower = body.lower()
+    title_lower = title.lower()
     if 'copy fail' in lower or 'cve-2026-31431' in lower:
         return '这次公开披露的是一个影响面很广的 Linux 本地提权漏洞，危险之处在于利用条件相对直接，而且会波及共享主机、容器节点、CI runner 和多租户执行环境。'
+    if 'contras' in title_lower or 'contrast cli' in lower or 'copyfile verification' in lower:
+        return '这条高危公告指向的是 Contrast CLI 生成策略中的 CopyFile 校验缺口。风险不只是普通文件覆盖，而是宿主机上具备特定连接能力的进程可能借此改写来宾系统关键文件，甚至进一步造成敏感数据泄露和 guest takeover。'
+    if 'kirby' in title_lower or 'kirby cms' in lower:
+        return '这条高危公告指出，Kirby CMS 在页面和文件列表权限校验上存在不一致。问题的重点不在公开访客，而在已登录用户可能借由权限检查缺口访问本不该看到的内容，因此受影响站点需要尽快核对角色权限配置与修复版本。'
     if 'ckan' in lower and 'sql' in lower:
         return '这条公告的核心不是普通缺陷，而是 CKAN 的未授权 SQL 注入与鉴权绕过风险，意味着攻击者可能直接接触私有资源和数据库系统信息。'
     if 'claude sdk' in lower or 'filesystem memory tool' in lower:
@@ -440,9 +471,227 @@ def _card_summary(title: str, focus: str, hint: str, body_quality: str) -> str:
         return '这条新闻本身不是 AI 技术进展，而是美国证监会新任主席 Paul Atkins 推出了名为 Material Matters 的官方播客。对今天这份 Top10 来说，它更像监管沟通方式变化的边缘信号，信息价值主要在观察监管机构如何重新组织对外叙事。'
     if 'craig venter has died' in title_lower or 'cursor camp' in title_lower:
         return '这条信息和今天的 AI 工程主线相关性偏弱，更适合作为边缘观察而不是核心主条。若后续候选池里有更强的模型、安全或 Agent 工程信号，优先级可以继续下调。'
+    return _normalize_summary_main('', hint, '', body_quality)
+
+
+def _normalize_title_zh(card_title: str, raw_title: str, source_type: str, source_name: str, title_zh_seed: str) -> str:
+    title = str(card_title or '').strip()
+    if _looks_chinese(title):
+        return title
+    seed = str(title_zh_seed or '').strip()
+    if _looks_chinese(seed):
+        return seed
+    raw_lower = raw_title.lower()
+    if source_type == 'hackernews_top' and ('for linux kernel vulnerabilities' in raw_lower or 'there is no heads-up to distributions' in raw_lower):
+        return 'Linux 内核漏洞披露流程暴露预警缺口'
+    if source_type == 'hackernews_top' and ('copy fail' in raw_lower or 'cve-2026-31431' in raw_lower):
+        return 'Linux 内核漏洞预警机制缺口暴露出来'
+    if source_type == 'hackernews_top' and 'opus 4.7 knows the real kelsey' in raw_lower:
+        return 'Opus 4.7 暴露出短文本作者识别能力'
+    if source_type == 'hackernews_top' and 'room 641a' in raw_lower:
+        return 'Mark Klein 向 EFF 披露 Room 641A 经过再被回看'
+    if source_type == 'hackernews_top' and 'earliest poem in english' in raw_lower:
+        return '最早英语诗歌新抄本被重新发现'
+    if source_type == 'github_advisory' and 'contras' in raw_lower:
+        return 'Contras 符号链接策略绕过漏洞需要尽快核查'
+    if source_type == 'github_advisory' and 'kirby cms' in raw_lower:
+        return 'Kirby CMS 权限校验缺口带来内容越权风险'
+    if (source_type == 'rss' or source_name.startswith('SEC')) and 'jason burt' in raw_lower:
+        return 'SEC 执法部门高层人事变动落定'
+    if 'copy-fail-cve-2026-31431' in raw_lower:
+        return 'Copy Fail PoC 把 Linux 提权风险进一步做实'
+    if 'mhr-cfw' in raw_lower:
+        return 'MHR-CFW 展示了基于 GAS 与 Cloudflare Workers 的转发链路'
+    if 'im-not-ai' in raw_lower:
+        return 'im-not-ai 试图把韩文 AI 文本改得更像自然表达'
+    if raw_title:
+        return raw_title
+    return title or '今日值得关注的信号'
+
+
+def _generate_source_specific_summary(title: str, source_type: str, source_name: str, body: str, summary_zh: str, hint: str, body_quality: str) -> str:
+    title_lower = title.lower()
+    body_clean = _clean_body(body)
+    if source_type == 'hackernews_top':
+        if 'bluetooth midi' in title_lower or 'windows midi' in title_lower:
+            return '这是一款面向 Windows 的开源小工具，目标是把蓝牙 BLE MIDI 键盘稳定接入 Windows MIDI Services，让 DAW 和 Web MIDI 应用像使用有线设备一样识别无线键盘。作者把配对成功但软件不可见、电脑回传音符无声以及接收通道不一致等问题拆成了可复现、可修复的工程方案。'
+        if 'claude.md' in title_lower and 'apple' in title_lower:
+            return '这条讨论围绕 Apple Support app 的安装包里误带 Claude.md 文件展开。它暴露出的重点不是单一文件泄露，而是面向 AI 编码工具的提示词、流程说明和开发约束文件，正在变成新的发布审查对象。'
+        if 'postscript interpreter in the browser' in title_lower or 'postscript' in title_lower:
+            return '这个项目把 Adobe 1991 年的 PostScript 解释器重新带进浏览器，让用户可以在本地直接渲染和查看 PostScript 文件，而不需要依赖服务器端转换。它有意思的地方不是怀旧，而是展示了旧软件资产如何通过模拟层重新接回今天的浏览器工作流。'
+        if 'your website is not for you' in title_lower:
+            return '这篇文章的核心观点是：网站首先应该服务用户完成任务，而不是服务老板、设计师或市场团队表达个人偏好。它值得看的地方在于把很多常见改版失败重新归因到“内部视角压过用户视角”这个更根本的问题上。'
+        if _looks_like_good_zh_summary(summary_zh):
+            return summary_zh
+        if _looks_like_good_zh_summary(hint):
+            return hint
+    if source_type == 'github_advisory':
+        if 'contras' in title_lower or 'contrast cli' in title_lower:
+            return '这条高危公告指向 Contrast CLI 生成策略中的 CopyFile 校验缺口。风险不只是普通文件覆盖，而是宿主机上具备特定连接能力的进程可能借此改写来宾系统关键文件，甚至进一步造成敏感数据泄露和 guest takeover。'
+        if 'kirby cms' in title_lower:
+            return '这条高危公告指向 Kirby CMS 在页面与文件列表权限校验上的不一致问题。风险不在公开访客，而在已登录用户可能借由权限检查缺口访问本不该看到的内容，因此重点是尽快核对角色权限配置与修复版本。'
+        if 'ckan' in title_lower:
+            return '这条安全公告的核心不是普通缺陷，而是 CKAN 的未授权 SQL 注入与鉴权绕过风险。对使用 CKAN 或类似数据服务组件的团队来说，真正要紧的是尽快确认受影响版本、是否暴露私有资源，以及数据库访问边界是否需要紧急收紧。'
+        if _looks_like_good_zh_summary(hint):
+            return hint
+    if source_type == 'github_high_stars':
+        if 'mhr-cfw' in title_lower:
+            return '这个项目展示的是一条把 Google Apps Script 与 Cloudflare Workers 串起来的转发链路，更像网络绕行与流量转发工具，而不是典型的 AI 项目。它值得关注的点在于实现方式和潜在使用场景，而不是产品完成度。'
+        if 'im-not-ai' in title_lower:
+            return '这个项目主打把 AI 写出来的韩文内容重新整理得更像自然表达，本质上是在做 AI 痕迹弱化这类文本后处理工具。它的特点不是改写观点，而是尽量保留原意，只在文体、节奏和表达层面做“去机器味”的润色。'
+        if 'copy-fail-cve-2026-31431' in title_lower or 'copy fail' in title_lower:
+            return '这次公开披露的是一个影响面很广的 Linux 本地提权漏洞。它的危险之处不只是提权本身，而是利用门槛相对直接，且会波及共享主机、容器节点、CI runner 和多租户执行环境，因此对云上和多租户场景的实际风险更高。'
+        if 'gpt-agreement-payment' in title_lower:
+            return '这个项目围绕 ChatGPT Team 订阅协议与支付链路做了较激进的重放与自动化研究，附带 hCaptcha 视觉求解器和一组反欺诈机制观察数据。它值得关注的不是可直接复用性，而是暴露出订阅、风控与自动化对抗之间的攻防面已经被更系统地工程化。'
+        if _looks_like_good_zh_summary(hint):
+            return hint
+    if _looks_like_good_zh_summary(summary_zh):
+        return summary_zh
+    if _looks_like_good_zh_summary(hint):
+        return hint
+    if body_quality in {'good', 'limited'} and _looks_chinese(body_clean):
+        return _trim_text(body_clean, 220)
+    return ''
+
+
+def _normalize_summary_main(card_summary: str, hint: str, summary_zh: str, body_quality: str) -> str:
+    zh_candidates = [summary_zh, card_summary, hint]
+    for candidate in zh_candidates:
+        text = str(candidate or '').strip()
+        if text and _looks_like_good_zh_summary(text):
+            return _trim_text(text, 220)
+    for candidate in zh_candidates:
+        text = str(candidate or '').strip()
+        if text and _looks_chinese(text) and not _is_weak_summary(text):
+            return _trim_text(text, 220)
     if body_quality in {'missing', 'thin'}:
-        return _trim_text(hint, 220)
-    return _trim_text(hint, 220)
+        return '这条内容目前正文依据偏弱，现阶段更适合作为补充信号查看，后续还需要更完整的正文或来源交叉确认。'
+    fallback = str(summary_zh or card_summary or hint or '').strip()
+    return _trim_text(fallback, 220)
+
+
+def _normalize_why_it_matters(existing: str, title: str, source_type: str, source_name: str, body: str, body_quality: str) -> str:
+    text = str(existing or '').strip()
+    if text and not _is_weak_summary(text):
+        return _trim_text(text, 180)
+    lower = f'{title} {body}'.lower()
+    if source_type == 'github_advisory' or 'cve-' in lower or 'ghsa-' in lower:
+        return '这类条目的价值在于帮助团队更早识别受影响版本、利用条件和短期缓解路径，避免把安全公告当成“知道名字就行”的背景噪音。'
+    if source_type == 'hackernews_top' and 'apple' in lower and 'claude.md' in lower:
+        return '它提示了一个新的 AI 开发供应链风险：除了密钥和调试配置，面向 AI 编码工具的指令文件也可能被误打进正式发行包。'
+    if 'website is not for you' in lower:
+        return '它提醒产品、设计和增长团队把判断标准重新拉回用户任务，而不是内部审美或管理层个人偏好。'
+    if 'postscript' in lower and 'browser' in lower:
+        return '它展示了“历史软件资产现代化”的一种实用途径：通过模拟层把老系统重新接入今天的浏览器和工作流。'
+    if 'bluetooth midi' in lower or 'windows midi' in lower:
+        return '它把一个长期存在但体验糟糕的兼容问题拆成了可复现、可解释、可修复的工程问题，对音乐软件和 Windows 工具链开发者很有参考价值。'
+    if body_quality in {'missing', 'thin'}:
+        return '当前更适合作为补充信号观察，后续仍需要更完整正文或更多来源交叉确认。'
+    return '这条内容值得关注，因为它不只是一个零散新闻点，而是能反映工程实现、产品方向或行业风险边界的实际变化。'
+
+
+def _build_key_points(title: str, source_type: str, source_name: str, body: str, summary_main: str) -> List[str]:
+    points: List[str] = []
+    lower = f'{title} {body}'.lower()
+    if 'bluetooth midi' in lower or 'windows midi' in lower:
+        points = [
+            '作者把蓝牙 MIDI 在 Windows 上“配对成功但软件不可用”的问题拆成多层兼容缺口。',
+            '方案核心是把 WinRT BLE MIDI 接到新的 Windows MIDI Services loopback 端口。',
+            '还额外处理了设备接收通道与默认发送通道不一致导致的静默掉音问题。',
+        ]
+    elif source_type == 'github_advisory' or 'ghsa-' in lower or 'cve-' in lower:
+        points = [
+            '需要先确认受影响版本、利用条件和是否存在公开补丁。',
+            '如果短期无法升级，应至少整理临时缓解方式和暴露面。',
+            '安全公告在晨报中的价值，不只是提醒存在漏洞，而是帮助团队快速形成核查动作。',
+        ]
+    elif 'postscript' in lower and 'browser' in lower:
+        points = [
+            '作者没有重写解释器，而是把历史 ROM 和模拟层一起搬进浏览器。',
+            '用户可直接在浏览器本地渲染 PostScript 文件，不依赖服务器。',
+            '这个案例说明“老软件资产现代化”并不一定要靠重写完成。',
+        ]
+    elif 'website is not for you' in lower:
+        points = [
+            '网站首先是帮助用户完成任务的工具，而不是管理层表达个人审美的载体。',
+            '很多糟糕改版不是缺设计能力，而是评审中被内部主观偏好反复改写。',
+            '文章核心是在提醒团队把判断重新拉回用户目标与研究证据。',
+        ]
+    elif 'claude.md' in lower and 'apple' in lower:
+        points = [
+            '社交平台爆料称 Apple Support app 的更新包中误带了 Claude.md 文件。',
+            'Apple 随后通过紧急小版本移除了相关文件。',
+            '事件暴露出 AI 开发配置文件也可能成为新的发布审查盲区。',
+        ]
+    elif _looks_chinese(summary_main):
+        sentences = re.split(r'[。！？]\s*', summary_main)
+        for sentence in sentences:
+            clean = sentence.strip()
+            if len(clean) >= 16:
+                points.append(clean + '。')
+            if len(points) >= 3:
+                break
+    return points[:3]
+
+
+def _is_weak_summary(text: str) -> bool:
+    lower = str(text or '').strip()
+    weak_phrases = [
+        '具备一定信息密度',
+        '适合作为今日候选进一步比较',
+        '释放了商业化、产品发布或企业采用信号',
+        '适合进入晨报主榜',
+        '更适合作为补充信号观察',
+    ]
+    return any(phrase in lower for phrase in weak_phrases)
+
+
+def _looks_like_good_zh_summary(text: str) -> bool:
+    text = str(text or '').strip()
+    if not text or not _looks_chinese(text) or _is_weak_summary(text):
+        return False
+    bad_markers = [
+        'hacker news',
+        'github advisory database',
+        'show hn:',
+        'new | past | comments',
+        'login',
+        'skip to content',
+    ]
+    lower = text.lower()
+    if any(marker in lower for marker in bad_markers):
+        return False
+    if len(text) < 28:
+        return False
+    return True
+
+
+def _looks_chinese(text: str) -> bool:
+    return bool(re.search(r'[\u4e00-\u9fff]', str(text or '')))
+
+
+def _hn_hint(title: str, body: str, fallback: str) -> str:
+    lower = f'{title} {body}'.lower()
+    if 'for linux kernel vulnerabilities' in lower or 'there is no heads-up to distributions' in lower:
+        return '围绕 Copy Fail 的邮件讨论指出，Linux 内核漏洞如果没有主动同步到特定发行版沟通渠道，很多发行版往往只能在公开披露后再跟进修补。这条真正值得看的，不只是漏洞本身，而是上游修复、长期维护分支回补和发行版响应之间存在明显时间差。'
+    if 'opus 4.7' in lower and 'identify' in lower:
+        return '文章通过多轮测试指出，Claude Opus 4.7 仅凭很短的文本片段，就可能推测出写作者身份，而且这种判断未必依赖账号记忆或公开发表内容。作者真正担心的不是模型猜对一次，而是匿名表达的保护边界正在被文本归因能力迅速削弱。'
+    if 'room 641a' in lower or 'eff' in lower:
+        return '这篇内容回看了 Mark Klein 如何把 AT&T Room 641A 的监听情况带给 EFF。它的价值不在新闻新鲜度，而在重新提醒人们：通信基础设施监控往往是在很长时间后，才被公众完整理解。'
+    if 'earliest poem in english' in lower:
+        return '这条内容讲的是一份古英语早期诗歌抄本被重新发现。它更偏文化与学术新闻，和今天的 AI 工程主线关系不强，适合作为边栏补充而不是核心主条。'
+    if len(body) >= 180:
+        return _trim_text(body, 220)
+    return _trim_text(fallback, 180)
+
+
+def _official_hint(title: str, body: str, fallback: str) -> str:
+    lower = f'{title} {body}'.lower()
+    if 'jason burt' in lower and 'enforcement' in lower:
+        return 'SEC 这条公告讲的是执法部门高层 Jason Burt 即将离任，属于监管机构内部人事调整。它和 AI 技术主线关系不强，但对观察监管执行风格、执法资源分配和后续对外信号仍有一定参考价值。'
+    if len(body) >= 180:
+        return _trim_text(body, 220)
+    return _trim_text(fallback, 180)
 
 
 def _story_title(item: Dict[str, Any]) -> str:

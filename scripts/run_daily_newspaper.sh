@@ -1,21 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PROJECT_ROOT="${1:-/root/projects/Morning-Newspaper-Manager}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+DEFAULT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+PROJECT_ROOT="${1:-${MORNING_NEWSPAPER_PROJECT_ROOT:-$DEFAULT_ROOT}}"
 cd "$PROJECT_ROOT"
 
 python3 src/pipeline/collect.py --project-root "$PROJECT_ROOT"
-
-python3 - <<'PY'
-from pathlib import Path
-from src.dashboard.static_html import write_static_dashboard
-
-root = Path('/root/projects/Morning-Newspaper-Manager')
-runtime = root / 'runtime'
-out = runtime / 'dashboard.html'
-write_static_dashboard(runtime, out)
-print(f"[OK] static html regenerated: {out}")
-PY
+python3 "$PROJECT_ROOT/scripts/rebuild_dashboard.py" "$PROJECT_ROOT"
 
 echo "[OK] daily newspaper regenerated"
 echo "[OK] html: $PROJECT_ROOT/runtime/dashboard.html"

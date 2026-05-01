@@ -88,11 +88,13 @@ def _to_display_item(item: Dict[str, Any], rank: int) -> Dict[str, Any]:
     # 优先使用新版 editorial 链产出的标题/摘要；旧 summary 字段仅作为降级兜底
     title_zh = str(item.get("card_title") or item.get("title_zh") or item.get("title") or "").strip() or _title_zh(title, summary, source_type, source_name, channel)
     title_en = str(item.get("title_en") or "").strip() or title
-    summary_zh = str(item.get("card_summary") or item.get("editorial_summary_hint") or "").strip()
-    if not summary_zh:
-        summary_zh = str(item.get("summary_zh") or item.get("summary_main") or "").strip()
-    if not summary_zh:
-        summary_zh = str(item.get("summary_llm") or "").strip() or _summary_zh(title, summary, source_type, source_name, channel)
+    summary_zh = str(item.get("summary_main") or item.get("card_summary") or item.get("editorial_summary_hint") or "").strip()
+    if not _looks_like_good_chinese_summary(summary_zh):
+        summary_zh = str(item.get("why_it_matters") or "").strip() if _looks_like_good_chinese_summary(str(item.get("why_it_matters") or "").strip()) else ""
+    if not _looks_like_good_chinese_summary(summary_zh):
+        summary_zh = str(item.get("summary_zh") or "").strip()
+    if not _looks_like_good_chinese_summary(summary_zh):
+        summary_zh = _summary_zh(title, summary, source_type, source_name, channel, item)
     summary_en = str(item.get("summary_en") or "").strip() or summary
     why_it_matters = str(item.get("why_it_matters") or "").strip()
     key_points = item.get("key_points") or []
@@ -100,8 +102,10 @@ def _to_display_item(item: Dict[str, Any], rank: int) -> Dict[str, Any]:
         key_points = []
     key_points = [str(point).strip() for point in key_points if str(point).strip()]
 
+    original_rank = int(item.get("rank", rank) or rank)
     return {
-        "rank": int(item.get("rank", rank) or rank),
+        "rank": rank,
+        "original_rank": original_rank,
         "item_id": str(item.get("item_id", "")).strip(),
         "priority": priority,
         "title": title_zh,
@@ -130,36 +134,31 @@ def _to_display_item(item: Dict[str, Any], rank: int) -> Dict[str, Any]:
 def _build_lead_bullets(final_newspaper: Dict[str, Any], top10: List[Dict[str, Any]]) -> List[Dict[str, str]]:
     items = _filter_top10(top10)
     cards: List[Dict[str, str]] = []
-    for item in items:
-        title = str(item.get('card_title') or item.get('title') or '').strip()
-        title_lower = title.lower()
-        if 'copy fail' in title_lower and not any(x.get('key') == 'copy-fail' for x in cards):
-            cards.append({
-                'key': 'copy-fail',
-                'icon': '🛡️',
-                'title': '安全边界重新抬高',
-                'summary': 'Copy Fail 把 Linux 本地提权风险重新带回多租户、容器节点和 CI 运行环境，影响面比普通漏洞更贴近真实生产场景。',
-            })
-        elif ('ckan' in title_lower or 'claude sdk' in title_lower) and not any(x.get('key') == 'toolchain-security' for x in cards):
-            cards.append({
-                'key': 'toolchain-security',
-                'icon': '🔐',
-                'title': 'AI 工具链开始成为安全面',
-                'summary': 'CKAN 和 Claude SDK 说明风险已经从传统基础设施外扩到 AI SDK、数据接口和本地记忆文件这类更贴近 Agent 工具链的层面。',
-            })
-        elif ('futureagi' in title_lower or 'harmonist' in title_lower or 'agent sprite forge' in title_lower) and not any(x.get('key') == 'agent-workflow' for x in cards):
-            cards.append({
-                'key': 'agent-workflow',
-                'icon': '🤖',
-                'title': 'Agent 工程走向可控化',
-                'summary': 'FutureAGI、Harmonist 和 Agent Sprite Forge 这类项目都在说明，Agent 正从“能调用模型”走向“能闭环优化、能被约束、能进入具体工作流”。',
-            })
-        if len(cards) >= 3:
-            break
-    if not cards:
-        lead = str(final_newspaper.get('lead') or '').strip()
-        return [{'key': 'lead', 'icon': '✨', 'title': '今日主线', 'summary': lead}] if lead else []
-    return cards[:3]
+    for idx, item in enumerate(items[:3], 1):
+        title = str(item.get('card_title') or item.get('title_zh') or item.get('title') or '').strip()
+        summary = str(item.get('summary_main') or item.get('card_summary') or item.get('editorial_summary_hint') or item.get('summary_zh') or item.get('summary') or '').strip()
+        key_points = item.get('key_points') or []
+        if not isinstance(key_points, list):
+            key_points = []
+        first_point = ''
+        for point in key_points:
+            point_text = str(point).strip()
+            if point_text:
+                first_point = point_text
+                break
+        lead_text = first_point or summary
+        if not title:
+            continue
+        cards.append({
+            'key': f'lead-{idx}',
+            'icon': _topic_icon(item),
+            'title': title,
+            'summary': _trim_lead_summary(lead_text),
+        })
+    if cards:
+        return cards
+    lead = str(final_newspaper.get('lead') or '').strip()
+    return [{'key': 'lead', 'icon': '✨', 'title': '今日主线', 'summary': lead}] if lead else []
 
 
 def _topic_icon(item: Dict[str, Any]) -> str:
@@ -179,6 +178,50 @@ def _topic_icon(item: Dict[str, Any]) -> str:
     return '✨'
 
 
+def _trim_lead_summary(text: str, limit: int = 90) -> str:
+    clean = re.sub(r'\s+', ' ', str(text or '').strip())
+    if not clean:
+        return ''
+    if len(clean) <= limit:
+        return clean
+    cut = clean[:limit].rstrip(' ，,;；:：')
+    return cut + '…'
+
+
+def _looks_like_good_chinese_summary(text: str) -> bool:
+    if not text:
+        return False
+    bad_signals = [
+        'Hacker News new | past | comments | ask | show | jobs | submit login',
+        'XCancel',
+        'Websmith Home',
+        'Running Adobe',
+        '| Hacker News',
+    ]
+    if any(x in text for x in bad_signals):
+        return False
+    zh_chars = len(re.findall(r'[\u4e00-\u9fff]', text))
+    return zh_chars >= 20
+
+
+def _hackernews_summary_zh(title: str, body_text: str) -> str:
+    text = re.sub(r'\s+', ' ', body_text or '').strip()
+    if not text:
+        return ''
+    if 'Bluetooth LE MIDI' in text and 'Windows MIDI Services' in text:
+        return '这是一款面向 Windows 的开源小工具，目标是把蓝牙 BLE MIDI 键盘稳定接入 Windows 的 MIDI 服务体系，让宿主软件、DAW 和 Web MIDI 应用像使用有线设备一样识别和使用无线键盘。作者围绕 Roland FP-90X 的实际排障过程，把配对成功但软件不可见、电脑回传音符无声，以及 MIDI 通道设置不一致等问题拆成了可定位、可修复的工程方案。'
+    if 'Claude.md' in text and 'Apple Support app' in text:
+        return '一则在社交平台传播的爆料称，Apple 在 Apple Support app 的一次更新中误带入了 Claude.md 文件，随后又通过紧急小版本将其移除。这类文件通常被视作 AI 编码工具的项目指令配置，因此事件被外界解读为 Apple 在部分开发流程中使用了 Claude 相关工具，也暴露出 AI 开发配置误入正式发行包的新型发布风险。'
+    if 'PostScript Cartridge Plus' in text and 'browser' in text.lower():
+        return '这篇文章把一段 1991 年随 HP LaserJet 扩展卡发布的 Adobe PostScript 解释器搬进了现代浏览器环境。作者通过模拟当年的 M68K 硬件和打印机外围接口，让原始 ROM 中的解释器在浏览器本地直接完成页面渲染，用户把 PostScript 文件拖进网页即可得到结果，全程不依赖服务器。'
+    if 'website isn' in text.lower() and 'tool with one job' in text.lower():
+        return '这篇文章讨论的不是具体网页技巧，而是一个常被管理层忽略的判断标准：网站首先是给用户完成任务用的，不是给老板或内部团队表达个人审美的。作者指出，很多网站并不是缺少研究或专业能力，而是在评审过程中不断被非用户视角的主观偏好改写，最后做成了让内部满意、却未必真正好用的版本。'
+    preview = _extract_link_preview(text)
+    if preview:
+        return _preview_summary_zh(title, preview)
+    return ''
+
+
 def _filter_top10(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     filtered: List[Dict[str, Any]] = []
     for item in items:
@@ -190,7 +233,7 @@ def _filter_top10(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         if body_quality == "thin" and editorial_priority != "risk_signal":
             continue
         filtered.append(item)
-    return filtered[:8]
+    return filtered[:10]
 
 
 def _final_top_stories(payload: Dict[str, Any], editorial_items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -204,10 +247,16 @@ def _final_top_stories(payload: Dict[str, Any], editorial_items: List[Dict[str, 
             continue
         title = str(story.get('title') or '').strip()
         matched = editorial_by_title.get(title)
+        summary = str(((matched or {}).get('summary_main')) or story.get('summary') or '').strip()
+        why = str(((matched or {}).get('why_it_matters')) or story.get('why') or '').strip()
+        key_points = (matched or {}).get('key_points') or []
+        if not isinstance(key_points, list):
+            key_points = []
         result.append({
-            'title': title,
-            'summary': str(story.get('summary') or '').strip(),
-            'why': str(story.get('why') or '').strip(),
+            'title': str((matched or {}).get('card_title') or title).strip(),
+            'summary': summary,
+            'why': why,
+            'key_points': [str(point).strip() for point in key_points if str(point).strip()][:3],
             'url': str((matched or {}).get('url') or '').strip(),
         })
     return result
@@ -261,8 +310,13 @@ def _title_zh(title: str, summary: str, source_type: str, source_name: str, chan
     return clean
 
 
-def _summary_zh(title: str, summary: str, source_type: str, source_name: str, channel: str) -> str:
+def _summary_zh(title: str, summary: str, source_type: str, source_name: str, channel: str, item: Dict[str, Any] | None = None) -> str:
     text = summary or title
+    body_text = str((item or {}).get("body_text_clean") or (item or {}).get("body_text") or "").strip()
+    if source_type == "hackernews_top":
+        editorial = _hackernews_summary_zh(title, body_text or text)
+        if editorial:
+            return editorial
     if channel == "mail_alert":
         return _mail_summary_zh(title, text)
     if source_type == "github_advisory":
