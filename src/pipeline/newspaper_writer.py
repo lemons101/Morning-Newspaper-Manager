@@ -101,6 +101,7 @@ def _build_editorial_top10(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         source_type = str(item.get('source_type') or '').strip()
         summary_zh = str(item.get('summary_zh') or item.get('summary') or '').strip()
         why = str(item.get('why_it_matters') or '').strip()
+        summary_basis = str(item.get('summary_basis') or '').strip()
 
         editorial_focus = _editorial_focus(raw_title, source_type, source_name, body)
         editorial_summary_hint = _editorial_summary_hint(raw_title, source_type, source_name, body, summary_zh)
@@ -109,9 +110,14 @@ def _build_editorial_top10(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         title_zh = _normalize_title_zh(card_title, raw_title, source_type, source_name, title_zh_seed)
         generated_summary_zh = _generate_source_specific_summary(raw_title, source_type, source_name, body, summary_zh, editorial_summary_hint, body_quality)
         normalized_summary_zh = generated_summary_zh or summary_zh
-        summary_main = _normalize_summary_main(normalized_summary_zh or card_summary, editorial_summary_hint, normalized_summary_zh, body_quality)
-        why_main = _normalize_why_it_matters(str(item.get('why_it_matters') or '').strip(), raw_title, source_type, source_name, body, body_quality)
-        key_points = _build_key_points(raw_title, source_type, source_name, body, summary_main)
+        summary_main = _normalize_summary_main(normalized_summary_zh or card_summary, editorial_summary_hint, normalized_summary_zh, body_quality, source_type=source_type, summary_basis=summary_basis, title=raw_title)
+        why_main = _normalize_why_it_matters(str(item.get('why_it_matters') or '').strip(), raw_title, source_type, source_name, body, body_quality, summary_basis=summary_basis)
+        key_points = _build_key_points(raw_title, source_type, source_name, body, summary_main, summary_basis=summary_basis, body_quality=body_quality)
+
+        if summary_basis == 'full_text' and _looks_like_raw_page_dump(summary_main):
+            summary_main = _rewrite_summary_from_body(raw_title, body, fallback=editorial_summary_hint or summary_zh)
+        if summary_basis == 'partial_text' and (_looks_like_raw_page_dump(summary_main) or not _looks_chinese(summary_main)):
+            summary_main = _rewrite_summary_from_body(raw_title, body, fallback=editorial_summary_hint or summary_zh)
         editorial_items.append({
             'rank': idx,
             'item_id': item_id,
@@ -131,6 +137,7 @@ def _build_editorial_top10(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             'body_quality': body_quality,
             'body_length': len(body),
             'body_text': body,
+            'content_basis': summary_basis,
             'editorial_focus': editorial_focus,
             'editorial_angle': _editorial_angle(raw_title, source_type, source_name, body),
             'editorial_summary_hint': summary_main,
@@ -471,7 +478,7 @@ def _card_summary(title: str, focus: str, hint: str, body_quality: str) -> str:
         return '这条新闻本身不是 AI 技术进展，而是美国证监会新任主席 Paul Atkins 推出了名为 Material Matters 的官方播客。对今天这份 Top10 来说，它更像监管沟通方式变化的边缘信号，信息价值主要在观察监管机构如何重新组织对外叙事。'
     if 'craig venter has died' in title_lower or 'cursor camp' in title_lower:
         return '这条信息和今天的 AI 工程主线相关性偏弱，更适合作为边缘观察而不是核心主条。若后续候选池里有更强的模型、安全或 Agent 工程信号，优先级可以继续下调。'
-    return _normalize_summary_main('', hint, '', body_quality)
+    return _normalize_summary_main('', hint, '', body_quality, title=title)
 
 
 def _normalize_title_zh(card_title: str, raw_title: str, source_type: str, source_name: str, title_zh_seed: str) -> str:
@@ -521,10 +528,14 @@ def _generate_source_specific_summary(title: str, source_type: str, source_name:
             return '这个项目把 Adobe 1991 年的 PostScript 解释器重新带进浏览器，让用户可以在本地直接渲染和查看 PostScript 文件，而不需要依赖服务器端转换。它有意思的地方不是怀旧，而是展示了旧软件资产如何通过模拟层重新接回今天的浏览器工作流。'
         if 'your website is not for you' in title_lower:
             return '这篇文章的核心观点是：网站首先应该服务用户完成任务，而不是服务老板、设计师或市场团队表达个人偏好。它值得看的地方在于把很多常见改版失败重新归因到“内部视角压过用户视角”这个更根本的问题上。'
+        if 'byomesh' in title_lower or 'lora mesh radio' in title_lower:
+            return '这条内容讲的是一个名为 BYOMesh 的 LoRa mesh 无线电项目，主打把传统 LoRa 低带宽链路往更高吞吐方向推进，试图让远距离低功耗组网不只适合传感器消息，也能承载更丰富的数据传输。'
         if _looks_like_good_zh_summary(summary_zh):
             return summary_zh
         if _looks_like_good_zh_summary(hint):
             return hint
+    if 'copilot coding agent' in title_lower:
+        return '这条内容围绕 GitHub Copilot 的 coding agent 能力展开，讨论焦点已经从自动补全延伸到让代理参与完整开发流程后，团队该如何设置测试边界、代码审查和人工接管机制。'
     if source_type == 'github_advisory':
         if 'contras' in title_lower or 'contrast cli' in title_lower:
             return '这条高危公告指向 Contrast CLI 生成策略中的 CopyFile 校验缺口。风险不只是普通文件覆盖，而是宿主机上具备特定连接能力的进程可能借此改写来宾系统关键文件，甚至进一步造成敏感数据泄露和 guest takeover。'
@@ -532,8 +543,9 @@ def _generate_source_specific_summary(title: str, source_type: str, source_name:
             return '这条高危公告指向 Kirby CMS 在页面与文件列表权限校验上的不一致问题。风险不在公开访客，而在已登录用户可能借由权限检查缺口访问本不该看到的内容，因此重点是尽快核对角色权限配置与修复版本。'
         if 'ckan' in title_lower:
             return '这条安全公告的核心不是普通缺陷，而是 CKAN 的未授权 SQL 注入与鉴权绕过风险。对使用 CKAN 或类似数据服务组件的团队来说，真正要紧的是尽快确认受影响版本、是否暴露私有资源，以及数据库访问边界是否需要紧急收紧。'
-        if _looks_like_good_zh_summary(hint):
-            return hint
+        if 'ps_checkout' in title_lower:
+            return '这条安全公告指向 ps_checkout 存在未校验参数导致的未授权方法调用风险。虽然官方标注为低危，但它仍提示支付相关组件在输入校验和方法暴露边界上存在可被滥用的缺口。'
+        return _metadata_summary_by_source(source_type, hint or summary_zh or title)
     if source_type == 'github_high_stars':
         if 'mhr-cfw' in title_lower:
             return '这个项目展示的是一条把 Google Apps Script 与 Cloudflare Workers 串起来的转发链路，更像网络绕行与流量转发工具，而不是典型的 AI 项目。它值得关注的点在于实现方式和潜在使用场景，而不是产品完成度。'
@@ -549,34 +561,119 @@ def _generate_source_specific_summary(title: str, source_type: str, source_name:
         return summary_zh
     if _looks_like_good_zh_summary(hint):
         return hint
+    if source_type == 'hackernews_top' and not _looks_chinese(body_clean):
+        return _metadata_summary_by_source(source_type, summary_zh or hint or title)
+    if source_type in {'tavily_skill', 'tavily_search'} and not _looks_chinese(body_clean):
+        return _metadata_summary_by_source(source_type, summary_zh or hint or title)
     if body_quality in {'good', 'limited'} and _looks_chinese(body_clean):
         return _trim_text(body_clean, 220)
-    return ''
+    return _metadata_summary_by_source(source_type, summary_zh or hint or title)
 
 
-def _normalize_summary_main(card_summary: str, hint: str, summary_zh: str, body_quality: str) -> str:
+def _normalize_summary_main(card_summary: str, hint: str, summary_zh: str, body_quality: str, *, source_type: str = '', summary_basis: str = '', title: str = '') -> str:
     zh_candidates = [summary_zh, card_summary, hint]
     for candidate in zh_candidates:
         text = str(candidate or '').strip()
         if text and _looks_like_good_zh_summary(text):
             return _trim_text(text, 220)
+
+    targeted = _metadata_summary_by_source(source_type, ' '.join([str(title or ''), str(summary_zh or ''), str(card_summary or ''), str(hint or '')]).strip())
+    if targeted and _looks_chinese(targeted):
+        lowered = targeted.lower()
+        if not any(x in lowered for x in ['值得继续观察', '更适合作为', '正在开发者社区被关注的项目、方法或观点', '来自外部搜索结果']):
+            return _trim_text(targeted, 220)
+
+    if summary_basis == 'metadata_only':
+        return _metadata_summary_by_source(source_type, summary_zh or card_summary or hint)
+    if summary_basis == 'partial_text':
+        best = str(summary_zh or card_summary or hint or '').strip()
+        if best and not _looks_like_raw_page_dump(best):
+            return _trim_text(best, 220)
+        return '从目前抓到的内容看，这条主要在讲一个仍有待补充细节的技术或产品主题，现阶段可以先把握主线，再等待更完整正文补齐背景。'
     for candidate in zh_candidates:
         text = str(candidate or '').strip()
         if text and _looks_chinese(text) and not _is_weak_summary(text):
             return _trim_text(text, 220)
     if body_quality in {'missing', 'thin'}:
-        return '这条内容目前正文依据偏弱，现阶段更适合作为补充信号查看，后续还需要更完整的正文或来源交叉确认。'
+        return _trim_text(targeted or '这条内容目前正文依据偏弱，现阶段还需要更完整的正文或更多来源补充，但已经能看出它对应的是一个值得继续跟进的具体主题。', 220)
     fallback = str(summary_zh or card_summary or hint or '').strip()
-    return _trim_text(fallback, 220)
+    return _trim_text(targeted or fallback, 220)
 
 
-def _normalize_why_it_matters(existing: str, title: str, source_type: str, source_name: str, body: str, body_quality: str) -> str:
+def _rewrite_summary_from_body(title: str, body: str, fallback: str = '') -> str:
+    clean = _clean_body(body)
+    clean = re.sub(r'\s+', ' ', clean).strip()
+    if not clean:
+        return _trim_text(fallback or title, 180)
+    title_lower = str(title or '').lower()
+    if 'deepclaude' in title_lower:
+        return '这是一个把 Claude Code 的 agent 工作流接到 DeepSeek V4 Pro、OpenRouter 等兼容后端上的开源方案，主打在尽量不改使用习惯的前提下，把代理式编码的模型成本明显压低。'
+    if 'underdrawings' in title_lower:
+        return '这篇文章介绍了一种给 AI 生成图片先打“底稿”的方法：先用 SVG 等确定性工具把文字、数字和位置画准，再交给生成模型补全视觉效果，以提高最终成图中的文本和数字准确率。'
+    if 'humanoid robot actuators' in title_lower:
+        return '这条内容聚焦人形机器人执行器，主要在解释不同执行器方案会如何影响机器人的力量输出、动作精度和整体运动能力。'
+    for bad in [
+        'Write better code with AI', 'Build and deploy intelligent apps', 'Manage and compare prompts',
+        'Instant dev environments', 'GitHub Advanced Security', 'Portfolio documentation', 'Table of Contents'
+    ]:
+        clean = clean.replace(bad, ' ')
+    clean = re.sub(r'\s+', ' ', clean).strip()
+    if len(clean) > 220:
+        clean = clean[:220].rstrip(' ，,;；:：') + '。'
+    if not _looks_chinese(clean) and fallback:
+        return _trim_text(fallback, 180)
+    return clean or _trim_text(fallback or title, 180)
+
+
+def _metadata_summary_by_source(source_type: str, text: str) -> str:
+    base = _trim_text(str(text or '').strip(), 180)
+    lower = str(text or '').lower()
+    if 'deepclaude' in lower:
+        return '这是一个把 Claude Code 的 agent 工作流接到 DeepSeek V4 Pro、OpenRouter 等兼容后端上的开源方案，核心卖点是在尽量保留原有使用体验的前提下，把编码代理的调用成本显著压低。'
+    if 'opencode' in lower:
+        return '这条内容讨论的是一个开源 AI coding agent 项目，重点不只是“又一个 agent”，而是它想把代码生成、工具调用和开发流程编排做成一个更可控、可替换的开源方案。'
+    if 'copilot coding agent' in lower:
+        return '这条内容围绕 GitHub Copilot 的 coding agent 能力展开，讨论焦点已经从自动补全延伸到让代理参与完整开发流程后，团队该如何设置测试边界、代码审查和人工接管机制。'
+    if 'cloud demand shifts toward ai' in lower:
+        return '这条内容讲的是企业上云需求正进一步向 AI 相关负载倾斜，重点信号不是单一厂商动作，而是企业真实使用场景正在把云资源采购和投入结构推向 AI。'
+    if 'underdrawings' in lower:
+        return '这篇文章介绍了一种先用确定性工具画出文字和数字底稿、再交给生成模型上色的做法，目的是提高 AI 图片里文本、数字和版式结构的准确率。'
+    if 'humanoid robot actuators' in lower:
+        return '这条内容围绕人形机器人执行器展开，核心不是泛谈机器人概念，而是在拆解执行器这类底层部件的类型、能力边界以及它们对整机动作表现的影响。'
+    if 'byomesh' in lower or 'lora mesh radio' in lower:
+        return '这条内容讲的是一个名为 BYOMesh 的 LoRa mesh 无线电项目，卖点是把传统 LoRa 低带宽链路往更高吞吐方向推进，试图让远距离低功耗组网不只适合传感器消息，也能承载更丰富的数据传输。'
+    if source_type == 'github_high_stars':
+        return '这条内容对应的是一个近期升温的开源项目或工具信号，现阶段最值得关注的是它试图解决什么问题、为什么会被社区快速放大，以及是否值得继续跟踪。'
+    if source_type == 'hackernews_top':
+        return '这条内容主要在讲一个正在开发者社区被关注的项目、方法或观点，重点应放在它具体讲了什么，而不是页面里的零碎导航信息。'
+    if source_type == 'github_advisory':
+        return '这条内容对应的是一则需要尽快核查影响面的安全公告，重点在确认受影响版本、利用条件和短期缓解动作。'
+    if source_type in {'tavily_skill', 'tavily_search'}:
+        return '这条内容来自外部搜索结果，核心应先落在它实际讲的产品、行业变化或技术主题上，而不是停留在“值得继续观察”的空泛判断。'
+    return base or '这条内容当前可直接确认的信息有限，但仍能作为一个值得继续核实的观察信号。'
+
+
+def _looks_like_raw_page_dump(text: str) -> bool:
+    lower = str(text or '').lower()
+    bad = [
+        'sign in', 'navigation menu', 'github copilot', 'portfolio documentation', 'table of contents', 'back to top',
+        'write better code with ai', 'build and deploy intelligent apps', 'manage and compare prompts', 'instant dev environments',
+        '| hacker news', 'open source ai coding agent opencode was the first open source agent i used'
+    ]
+    return any(x in lower for x in bad)
+
+
+def _normalize_why_it_matters(existing: str, title: str, source_type: str, source_name: str, body: str, body_quality: str, *, summary_basis: str = '') -> str:
     text = str(existing or '').strip()
     if text and not _is_weak_summary(text):
         return _trim_text(text, 180)
     lower = f'{title} {body}'.lower()
     if source_type == 'github_advisory' or 'cve-' in lower or 'ghsa-' in lower:
         return '这类条目的价值在于帮助团队更早识别受影响版本、利用条件和短期缓解路径，避免把安全公告当成“知道名字就行”的背景噪音。'
+    if summary_basis == 'metadata_only' and source_type == 'github_high_stars':
+        return '这类项目型条目即使正文有限，也值得从它解决的问题、社区关注原因和潜在使用场景来判断是否需要继续跟踪。'
+    if summary_basis == 'metadata_only' and source_type == 'hackernews_top':
+        return '这类条目的价值主要在于它提出了什么问题、代表了哪类开发者关注点，而不是把页面里零碎文字直接当成完整结论。'
     if source_type == 'hackernews_top' and 'apple' in lower and 'claude.md' in lower:
         return '它提示了一个新的 AI 开发供应链风险：除了密钥和调试配置，面向 AI 编码工具的指令文件也可能被误打进正式发行包。'
     if 'website is not for you' in lower:
@@ -586,12 +683,25 @@ def _normalize_why_it_matters(existing: str, title: str, source_type: str, sourc
     if 'bluetooth midi' in lower or 'windows midi' in lower:
         return '它把一个长期存在但体验糟糕的兼容问题拆成了可复现、可解释、可修复的工程问题，对音乐软件和 Windows 工具链开发者很有参考价值。'
     if body_quality in {'missing', 'thin'}:
-        return '当前更适合作为补充信号观察，后续仍需要更完整正文或更多来源交叉确认。'
-    return '这条内容值得关注，因为它不只是一个零散新闻点，而是能反映工程实现、产品方向或行业风险边界的实际变化。'
+        return '这条内容当前仍需要更多正文或来源补充，但它已经足以提供一个值得继续观察的方向信号。'
+    return '这条内容值得关注，因为它对应的是一个更具体的工程、产品或行业变化，而不只是表面上的热闹话题。'
 
 
-def _build_key_points(title: str, source_type: str, source_name: str, body: str, summary_main: str) -> List[str]:
+def _build_key_points(title: str, source_type: str, source_name: str, body: str, summary_main: str, *, summary_basis: str = '', body_quality: str = '') -> List[str]:
     points: List[str] = []
+    if summary_basis == 'metadata_only':
+        if source_type == 'github_high_stars':
+            return [
+                '它当前更像一个近期升温的项目或工具信号，重点是看它到底在解决什么实际问题。',
+                '社区转发、加星和讨论热度说明它已经引起关注，但不代表方案本身已经被充分验证。',
+                '如果后续还要继续保留，最好补充 README 主体或更多外部介绍来提高摘要确定性。',
+            ]
+        if source_type == 'hackernews_top':
+            return [
+                '这条当前更像社区讨论入口，重点是看它为什么会被一批开发者同时拿出来讨论。',
+                '在正文依据不足时，不宜把页面碎片直接当成结论，更适合先把握核心争议点。',
+                '它的晨报价值主要来自讨论原因和关注焦点，而不只是标题本身。',
+            ]
     lower = f'{title} {body}'.lower()
     if 'bluetooth midi' in lower or 'windows midi' in lower:
         points = [

@@ -50,10 +50,12 @@ Morning-Newspaper-Manager 是一个围绕 **AI 早报生产链路** 构建的完
 - `top10_editorial_ready.json` 是内容中间核心
 - 页面“主要内容”应优先来自：
   - `summary_main`
-  - `why_it_matters`
   - `key_points`
+  - `editorial_summary_hint`
+  - `why_it_matters`
   - `card_title`
   - `card_summary`
+- `why_it_matters` 只回答“为什么值得看”，不能抢占“主要内容”位
 - 页面层只负责展示，不负责内容救火
 - `Top10` 页面默认展示完整 **10 条**
 - 固定页面访问方式是产品能力的一部分，而不是调试便利
@@ -92,6 +94,13 @@ Top10 不直接上页面，而是先生成更可编辑的中间层：
 - 卡片标题提炼
 - 卡片主要内容提炼
 - `top10_editorial_ready.json`
+
+当前这层的验收标准已经进一步明确为：
+
+- `summary_main` 必须优先写“这条讲了什么”
+- `why_it_matters` 只补“为什么值得看”
+- `主要内容` 不接受英文残片、网页导航残片、系统解释口吻
+- 即使正文不足，也应该尽量产出自然中文摘要，而不是把 fallback 写成系统说明
 
 ### 3.4 最终晨报与页面
 最终产物包括：
@@ -457,6 +466,40 @@ python3 -m http.server 8510
 - 项目内部只保证生成 `runtime/dashboard.html`
 - 访问地址由部署方式决定
 - README 中的 URL 只作为示例，不应写死为唯一真相
+
+### 7.6 本轮页面与摘要修复后的关键规则
+
+这部分是这轮真实排查后沉淀下来的约束，后续继续改页面或摘要时，建议直接遵守：
+
+#### A. Top10 展示层不要再吞条目
+- `Top10` 默认就应展示完整 **10 条**
+- 不要在 `view_model` 里因为 `body_quality == thin` 等展示层判断再过滤掉条目
+- 如果出现“数据有 10 条、页面只看到 9 条”，优先检查 `src/dashboard/view_model.py`
+
+#### B. `今日看点` 和 `Top10` 不能走两套摘要逻辑
+- `lead / 今日看点` 应尽量复用与 `Top10 主卡片` 一致的中文摘要链路
+- 如果 `Top10` 已修好，但 `今日看点` 还显示英文残片或旧 fallback，优先检查 `src/dashboard/view_model.py` 的 `_build_lead_bullets(...)`
+
+#### C. 摘要字段优先级要固定
+页面主摘要推荐优先级：
+
+1. `summary_main`
+2. `key_points[0]`
+3. `editorial_summary_hint`
+4. `why_it_matters`
+5. 其他兜底
+
+不要过早回退到 `why_it_matters`，否则页面会重新变成空泛解释句。
+
+#### D. 主摘要的页面验收标准
+只要出现在页面 `主要内容` 位，就默认要满足：
+
+- 中文
+- 先讲内容
+- 再讲价值
+- 不能像网页碎片
+- 不能像系统注释
+- 不能是“更适合作为……”“值得继续观察……”这种空泛句
 
 ---
 

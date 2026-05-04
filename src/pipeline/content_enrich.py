@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
+import html
 import re
 
 
@@ -163,8 +164,14 @@ def _html_to_text(html: str) -> str:
 
 
 def _extract_meaningful_text(html: str, *, url: str, source_type: str) -> str:
-    text = _html_to_text(html)
     host = urlparse(url).netloc.lower()
+
+    if source_type == 'hackernews_top' and 'news.ycombinator.com' not in host:
+        article = _extract_article_html(html)
+        if article:
+            html = article
+
+    text = _html_to_text(html)
 
     if "github.com" in host and source_type == "github_high_stars":
         text = _extract_github_repo_text(text)
@@ -183,7 +190,8 @@ def _extract_meaningful_text(html: str, *, url: str, source_type: str) -> str:
             "subscribe to our", "share this article", "advertisement", "use saved searches",
             "include my email address", "you signed in with another tab", "you signed out in another tab",
             "you switched accounts on another tab", "reload to refresh your session", "notifications", "fork",
-            "star", "branches", "tags", "releases", "report repository", "saved searches"
+            "star", "branches", "tags", "releases", "report repository", "saved searches", "table of contents",
+            "back to top", "portfolio documentation"
         ]):
             continue
         if _looks_ui_noise(line):
@@ -248,8 +256,24 @@ def _looks_ui_noise(text: str) -> bool:
     return False
 
 
+def _extract_article_html(raw_html: str) -> str:
+    for pattern in [
+        r'<article[^>]*>([\s\S]*?)</article>',
+        r'<main[^>]*>([\s\S]*?)</main>',
+        r'<div[^>]+class="[^"]*(post-content|entry-content|article-content|markdown-body|content)[^"]*"[^>]*>([\s\S]*?)</div>',
+    ]:
+        m = re.search(pattern, raw_html, flags=re.IGNORECASE)
+        if not m:
+            continue
+        content = m.group(m.lastindex or 1)
+        if content and len(content) > 400:
+            return content
+    return raw_html
+
+
 def _clean_text(text: str) -> str:
-    lines = [re.sub(r"\s+", " ", line).strip() for line in (text or "").splitlines()]
+    text = html.unescape(text or '')
+    lines = [re.sub(r"\s+", " ", line).strip() for line in text.splitlines()]
     lines = [line for line in lines if line]
     deduped: List[str] = []
     seen = set()

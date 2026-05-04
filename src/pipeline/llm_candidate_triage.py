@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -88,11 +88,18 @@ def run_llm_candidate_triage(root: Path) -> Path:
 def select_triage_candidates_by_llm(items: List[Dict[str, Any]], *, limit: int = 15) -> List[Dict[str, Any]]:
     news_items = [item for item in items if str(item.get('channel') or '') != 'mail_alert']
     ranked = sorted(news_items, key=_rank_key, reverse=True)
-    selected = ranked[:max(1, limit)]
+
+    fresh_48h = [item for item in ranked if _hours_since_published(item) is not None and _hours_since_published(item) <= 48]
+    fallback_recent = [item for item in ranked if item not in fresh_48h and (_hours_since_published(item) is None or _hours_since_published(item) <= 96)]
+    stale = [item for item in ranked if item not in fresh_48h and item not in fallback_recent]
+
+    selected = (fresh_48h + fallback_recent + stale)[:max(1, limit)]
     rows = []
     for idx, item in enumerate(selected, 1):
         row = dict(item)
         row['candidate_rank'] = idx
+        age_hours = _hours_since_published(item)
+        row['age_hours'] = age_hours
         rows.append(row)
     return rows
 
@@ -228,9 +235,13 @@ def _rank_key(item: Dict[str, Any]) -> tuple:
     keep_rank = 1 if str(item.get('final_keep') or '') == 'yes' else 0
     priority = str(item.get('priority_llm') or 'FYI')
     priority_rank = {'Urgent': 3, 'Important': 2, 'FYI': 1}.get(priority, 0)
+    freshness_rank = _freshness_rank(item)
+    topical_penalty = _topic_penalty(item)
     return (
         keep_rank,
+        freshness_rank,
         priority_rank,
+        topical_penalty,
         int(item.get('candidate_score') or 0),
         int(item.get('heat_score') or 0),
         int(item.get('quality_score') or 0),
@@ -239,6 +250,44 @@ def _rank_key(item: Dict[str, Any]) -> tuple:
         float(item.get('confidence') or 0),
         str(item.get('published_at') or ''),
     )
+
+
+def _hours_since_published(item: Dict[str, Any]) -> float | None:
+    raw = str(item.get('published_at') or '').strip()
+    if not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(raw.replace('Z', '+00:00'))
+    except Exception:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+    return max(0.0, (now - dt.astimezone(timezone.utc)).total_seconds() / 3600)
+
+
+def _freshness_rank(item: Dict[str, Any]) -> int:
+    hours = _hours_since_published(item)
+    if hours is None:
+        return 1
+    if hours <= 24:
+        return 4
+    if hours <= 48:
+        return 3
+    if hours <= 96:
+        return 2
+    return 1
+
+
+def _topic_penalty(item: Dict[str, Any]) -> int:
+    title = str(item.get('title') or '').lower()
+    url = str(item.get('url') or '').lower()
+    penalty = 0
+    if 'this month' in title or 'monthly' in title or 'newsletter' in title:
+        penalty -= 2
+    if '/2026/04/' in url or '2026-04-30' in url:
+        penalty -= 1
+    return penalty
 
 
 def _clamp_int(value: Any, low: int, high: int) -> int:

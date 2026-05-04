@@ -89,6 +89,21 @@ def _to_display_item(item: Dict[str, Any], rank: int) -> Dict[str, Any]:
     title_zh = str(item.get("card_title") or item.get("title_zh") or item.get("title") or "").strip() or _title_zh(title, summary, source_type, source_name, channel)
     title_en = str(item.get("title_en") or "").strip() or title
     summary_zh = str(item.get("summary_main") or item.get("card_summary") or item.get("editorial_summary_hint") or "").strip()
+    key_points = item.get("key_points") or []
+    if not isinstance(key_points, list):
+        key_points = []
+    first_key_point = ""
+    for point in key_points:
+        point_text = str(point).strip()
+        if _looks_like_good_chinese_summary(point_text):
+            first_key_point = point_text
+            break
+    if not _looks_like_good_chinese_summary(summary_zh) and first_key_point:
+        summary_zh = first_key_point
+    if not _looks_like_good_chinese_summary(summary_zh):
+        editorial_hint = str(item.get("editorial_summary_hint") or "").strip()
+        if _looks_like_good_chinese_summary(editorial_hint):
+            summary_zh = editorial_hint
     if not _looks_like_good_chinese_summary(summary_zh):
         summary_zh = str(item.get("why_it_matters") or "").strip() if _looks_like_good_chinese_summary(str(item.get("why_it_matters") or "").strip()) else ""
     if not _looks_like_good_chinese_summary(summary_zh):
@@ -97,9 +112,6 @@ def _to_display_item(item: Dict[str, Any], rank: int) -> Dict[str, Any]:
         summary_zh = _summary_zh(title, summary, source_type, source_name, channel, item)
     summary_en = str(item.get("summary_en") or "").strip() or summary
     why_it_matters = str(item.get("why_it_matters") or "").strip()
-    key_points = item.get("key_points") or []
-    if not isinstance(key_points, list):
-        key_points = []
     key_points = [str(point).strip() for point in key_points if str(point).strip()]
 
     original_rank = int(item.get("rank", rank) or rank)
@@ -136,17 +148,25 @@ def _build_lead_bullets(final_newspaper: Dict[str, Any], top10: List[Dict[str, A
     cards: List[Dict[str, str]] = []
     for idx, item in enumerate(items[:3], 1):
         title = str(item.get('card_title') or item.get('title_zh') or item.get('title') or '').strip()
-        summary = str(item.get('summary_main') or item.get('card_summary') or item.get('editorial_summary_hint') or item.get('summary_zh') or item.get('summary') or '').strip()
+        summary = str(item.get('summary_main') or '').strip()
         key_points = item.get('key_points') or []
         if not isinstance(key_points, list):
             key_points = []
         first_point = ''
         for point in key_points:
             point_text = str(point).strip()
-            if point_text:
+            if _looks_like_good_chinese_summary(point_text):
                 first_point = point_text
                 break
-        lead_text = first_point or summary
+        if not _looks_like_good_chinese_summary(summary):
+            summary = str(item.get('card_summary') or item.get('editorial_summary_hint') or item.get('summary_zh') or '').strip()
+        if not _looks_like_good_chinese_summary(summary) and first_point:
+            summary = first_point
+        if not _looks_like_good_chinese_summary(summary):
+            summary = str(item.get('why_it_matters') or '').strip() if _looks_like_good_chinese_summary(str(item.get('why_it_matters') or '').strip()) else ''
+        if not _looks_like_good_chinese_summary(summary):
+            summary = _trim_text(str(item.get('summary_en') or item.get('summary') or ''), 90)
+        lead_text = summary or first_point
         if not title:
             continue
         cards.append({
@@ -226,11 +246,7 @@ def _filter_top10(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     filtered: List[Dict[str, Any]] = []
     for item in items:
         title = str(item.get("title") or item.get("title_zh") or "").strip()
-        body_quality = str(item.get("body_quality") or "").strip()
-        editorial_priority = str(item.get("editorial_priority") or "").strip()
         if title in {"Craig Venter has died", "Cursor Camp"}:
-            continue
-        if body_quality == "thin" and editorial_priority != "risk_signal":
             continue
         filtered.append(item)
     return filtered[:10]
