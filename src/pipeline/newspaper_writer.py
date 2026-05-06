@@ -12,8 +12,9 @@ from src.models import utc_now_iso
 
 TOP_ITEM_BODY_LIMIT = 1800
 MAX_FETCH_ITEMS = 10
-MAX_WORKERS = 4
+MAX_WORKERS = 2
 MIN_GOOD_BODY_LENGTH = 400
+FETCH_TIMEOUT_SECONDS = 6
 
 
 def run_newspaper_writer(root: Path) -> Path:
@@ -101,7 +102,7 @@ def _build_editorial_top10(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         source_type = str(item.get('source_type') or '').strip()
         summary_zh = str(item.get('summary_zh') or item.get('summary') or '').strip()
         why = str(item.get('why_it_matters') or '').strip()
-        summary_basis = str(item.get('summary_basis') or '').strip()
+        summary_basis = str(item.get('summary_basis') or item.get('content_basis') or '').strip()
 
         editorial_focus = _editorial_focus(raw_title, source_type, source_name, body)
         editorial_summary_hint = _editorial_summary_hint(raw_title, source_type, source_name, body, summary_zh)
@@ -174,7 +175,7 @@ def _fetch_via_web_fetch(url: str) -> Dict[str, str]:
 
     try:
         import requests
-        response = requests.get(url, timeout=12, headers={
+        response = requests.get(url, timeout=FETCH_TIMEOUT_SECONDS, headers={
             'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36'
         })
         response.raise_for_status()
@@ -358,7 +359,7 @@ def _build_fallback_newspaper(items: List[Dict[str, Any]]) -> Dict[str, Any]:
         'lead': _build_lead(items),
         'top_stories': top_stories,
         'other_signals': other,
-        'closing': '以上内容已优先基于可获取正文重整；正文不足的条目则做了保守降级处理。',
+        'closing': '以上内容优先基于可获取正文重整；正文不足的条目会明确降级处理，避免用空泛描述充当主要内容。',
     }
 
 
@@ -391,32 +392,38 @@ def _render_markdown(payload: Dict[str, Any]) -> str:
 
 
 def _compose_story_summary(item: Dict[str, Any]) -> str:
+    summary_main = str(item.get('summary_main') or '').strip()
     hint = str(item.get('editorial_summary_hint') or '').strip()
     focus = str(item.get('editorial_focus') or '').strip()
     body_quality = str(item.get('body_quality') or '').strip()
     title = str(item.get('title') or '').strip()
+    body = str(item.get('body_text') or '').strip()
+
+    if _looks_like_good_zh_summary(summary_main) and len(summary_main) >= 60:
+        return _storytone_expand_summary(title, summary_main, focus, body_quality, body)
 
     if focus == '安全风险与影响面':
         if 'Copy Fail' in title:
-            return '公开披露的信息显示，这个 Linux 本地提权漏洞影响面很广，而且利用条件相对直接，对共享主机、容器节点和 CI runner 这类环境尤其危险。短期更值得关注的不是漏洞名字本身，而是内部运行环境是否已经完成补丁、缓解和最小权限收口。'
+            return '公开披露的信息显示，这个 Linux 本地提权漏洞影响面很广，而且利用条件相对直接，对共享主机、容器节点和 CI runner 这类环境尤其危险。短期真正该做的不是背漏洞编号，而是把内部运行环境、补丁节奏、临时缓解和最小权限收口逐项过一遍，否则它很容易从“别人家的安全新闻”变成“自己家的事故复盘”。'
         if 'CKAN' in title:
-            return '这条风险的严重性在于，它把未授权 SQL 注入和鉴权绕过叠在了一起，攻击者可能借此接触私有资源和数据库系统信息。对于使用 CKAN 或类似数据服务组件的团队，这类问题更像是需要立刻核查版本和暴露面的基础设施信号。'
+            return '这条风险的严重性在于，它把未授权 SQL 注入和鉴权绕过叠在了一起，攻击者可能借此接触私有资源和数据库系统信息。对使用 CKAN 或类似数据服务组件的团队来说，这不是那种可以先收藏再说的漏洞，而是应该立刻核查版本、暴露面和访问边界的基础设施信号。'
         if 'Claude SDK' in title:
-            return '这条公告提醒的是，AI SDK 本身正在成为新的安全边界。默认文件权限如果处理不当，就不只是本地配置问题，而可能影响共享主机、容器环境下的状态文件、记忆文件和后续 agent 行为。'
+            return '这条公告提醒的是，AI SDK 本身正在成为新的安全边界。默认文件权限如果处理不当，就不只是本地配置问题，而可能影响共享主机、容器环境下的状态文件、记忆文件和后续 agent 行为，所以它的意义在于提醒大家：Agent 工具链默认值也要按安全产品来看。'
 
     if focus == 'AI Agent 工程化平台':
-        return '这个项目的重点不是再加一个独立工具，而是试图把评测、追踪、仿真、护栏和网关能力放进同一个反馈闭环里。它反映出的趋势是，AI Agent 团队已经不满足于“看见问题”，而开始追求把线上表现直接转回下一轮优化。'
+        return '这个项目的重点不是再加一个独立工具，而是试图把评测、追踪、仿真、护栏和网关能力放进同一个反馈闭环里。它反映出的趋势很明确：AI Agent 团队已经不满足于“先跑起来再说”，而是在认真补齐上线、回放、观测和持续优化这些真正决定能不能进生产的工程层。'
 
     if focus == 'AI Agent 约束与协作机制':
-        return '这类项目代表的是另一条路线：不是让 Agent 靠 prompt 自觉守规矩，而是把 review、记忆更新、供应链校验等流程变成硬约束。随着 AI coding 更深入真实研发流程，这种“能否被约束”会比“能否写代码”更关键。'
+        return '这类项目代表的是另一条路线：不是让 Agent 靠 prompt 自觉守规矩，而是把 review、记忆更新、供应链校验等流程变成硬约束。说白了，就是默认 agent 会乱来，所以先把护栏焊死；随着 AI coding 更深入真实研发流程，这种“能不能被约束住”会比“能不能写几段代码”更关键。'
 
     if focus == 'AI 生成内容工具':
-        return '这类项目真正有意思的地方，不是再生成一张图，而是把图像生成推进成可直接进入工作流的资产生产链。对于游戏、互动内容和素材流水线场景，这比单次演示更接近实际落地。'
+        return '这类项目真正有意思的地方，不是再生成一张图，而是把图像生成推进成可直接进入工作流的资产生产链。对于游戏、互动内容和素材流水线场景，这比单次演示更接近真实落地，也更接近可以被正式采用的阶段。'
 
     if body_quality in {'missing', 'thin'}:
         return _weak_item_summary(item)
 
-    return hint or str(item.get('summary_zh') or '').strip()
+    seed = summary_main or hint or str(item.get('summary_zh') or '').strip()
+    return _content_first_summary(title, seed, focus, body_quality, body)
 
 
 def _github_project_hint(title: str, body: str, fallback: str) -> str:
@@ -442,20 +449,44 @@ def _compose_other_signal(item: Dict[str, Any]) -> str:
     if body_quality in {'missing', 'thin'}:
         summary = _weak_item_summary(item)
     else:
-        summary = str(item.get('editorial_summary_hint') or item.get('summary_zh') or '').strip()
+        seed = str(item.get('summary_main') or item.get('editorial_summary_hint') or item.get('summary_zh') or '').strip()
+        summary = _trim_text(_storytone_expand_summary(title, seed, focus, body_quality, str(item.get('body_text') or '').strip()), 140)
     return f'{title}：{focus}。{summary}'
+
+
+def _content_first_summary(title: str, seed: str, focus: str, body_quality: str, body: str) -> str:
+    text = _trim_text(str(seed or '').strip(), 220)
+    if not text:
+        return ''
+    blocked = [
+        '这条内容值得关注',
+        '这条内容当前更像一个社区讨论入口',
+        '这条内容之所以值得进晨报',
+        '这类条目真正有用的地方',
+        '它值得看的不只是',
+        '进一步看，行业已经不再',
+        '真正的分水岭不在于',
+        '如果一条内容能在开发者社区被反复顶上来',
+    ]
+    for marker in blocked:
+        if marker in text:
+            text = text.split(marker, 1)[0].strip()
+    text = text.rstrip('，,；;：:')
+    if text:
+        return text
+    return _trim_text(str(seed or '').strip(), 220)
 
 
 def _weak_item_summary(item: Dict[str, Any]) -> str:
     title = str(item.get('title') or '').strip()
     source_type = str(item.get('source_type') or '').strip()
     if 'Craig Venter' in title:
-        return '这条内容更像是社区侧的泛科技关注点，与 AI 主线关联较弱；如果最终版面有限，可以考虑降到边栏信号位甚至替换出 Top10。'
+        return '这条内容更像是社区侧的泛科技关注点，目前能确认的文章信息有限，和 AI 主线关系也不算强。'
     if 'Cursor Camp' in title:
-        return '这条目前只有社区热度信号，正文依据偏弱。如果后续抓不到更实的内容，建议把它当作“社区讨论升温”处理，而不是主新闻。'
+        return '这条目前主要体现的是社区热度，正文依据偏弱；现阶段更接近一个讨论信号，还不足以展开成信息完整的主条。'
     if source_type == 'hackernews_top':
-        return '当前更多体现的是社区热度，而不是已经确认的深度正文信息，适合作为轻量补充而不是主头条。'
-    return '这条信息目前正文依据不足，更适合作为轻量补充信号，后续如果能抓到原文再决定是否上调。'
+        return '这条现在更像社区讨论入口，当前能抓到的正文信息还不够完整，因此暂时只能给出较保守的内容概括。'
+    return '这条信息目前正文依据不足，现阶段只能先保留为简要概括；如果后续拿到更完整正文，再补充细节。'
 
 
 def _card_summary(title: str, focus: str, hint: str, body_quality: str) -> str:
@@ -534,9 +565,25 @@ def _generate_source_specific_summary(title: str, source_type: str, source_name:
             return summary_zh
         if _looks_like_good_zh_summary(hint):
             return hint
+    if 'computer use is 45x more expensive than structured apis' in title_lower:
+        return '这篇文章拿同一个后台管理任务做对照测试：一条路线让 AI 通过截图、点击和页面操作完成任务，另一条路线则直接调用结构化 API。结果是前者走了 53 步、消耗约 55.1 万 token，后者只用了 8 次调用和约 1.2 万 token，核心结论不是“视觉代理不能用”，而是如果系统具备可调用接口，直接走 API 在成本和稳定性上会明显更划算。'
+    if 'write some software, give it away for free' in title_lower:
+        return '这篇文章讨论的是一种反常见 SaaS 化逻辑的软件观：作者把自己开发的开源写作工具 Nonograph 免费开放，并明确反对为了订阅、广告和资本叙事去不断叠加收费与噱头功能。文章真正想表达的重点，是软件是否必须持续被包装成最大化变现的产品，以及创作者能否保留把工具当作品而不是当流水线生意来做的空间。'
+    if 'de tld offline due to dnssec' in title_lower or 'dnssec' in title_lower:
+        return '这条内容围绕 .de 域名体系疑似因 DNSSEC 信任链或签名配置异常而出现可用性问题展开。虽然当前抓到的正文主要是分析工具输出，但已经能看出讨论焦点在于：一旦顶级域或权威解析链路上的 DNSSEC 配置出错，影响不会停留在单个站点，而可能直接放大到整片域名空间的访问稳定性。'
     if 'copilot coding agent' in title_lower:
         return '这条内容围绕 GitHub Copilot 的 coding agent 能力展开，讨论焦点已经从自动补全延伸到让代理参与完整开发流程后，团队该如何设置测试边界、代码审查和人工接管机制。'
+    if 'cloud demand shifts toward ai' in title_lower:
+        return '这条内容讲的是企业上云需求正在更多转向 AI 负载，云厂商未来的竞争重点也会越来越多落在推理算力、专用芯片和基础设施供给能力上。'
+    if 'permit optional semiannual reporting by public companies' in title_lower or ('semiannual reporting' in title_lower and 'public companies' in title_lower):
+        return '这条 SEC 新闻稿讲的是一项拟议规则修改：允许上市公司用半年报替代现行的季度中期报告义务。核心变化不在某家公司本身，而在信息披露节奏可能被拉长，这会直接影响上市公司合规成本、投资者获取经营更新的频率，以及美国证券披露制度的运作方式。'
     if source_type == 'github_advisory':
+        if 'avideo' in title_lower:
+            return '这条公告讲得很具体：AVideo 会把 `objects/plugins.json.php` 公开暴露出来，未登录用户可以从中读到 APISecret，然后再拿这个密钥去调用原本受保护的 API 接口，比如用户列表。问题的本质不是“有个配置泄露”这么简单，而是一个公开配置入口直接串起了后续未授权访问链。'
+        if 'vllm' in title_lower:
+            return '这条公告指向 vLLM 的多模态输入处理缺陷：攻击者只要在纯文本提示里伪造特殊 token 占位符，却不真正提供图像或视频载荷，就可能触发空索引异常，最终把 worker 打崩或拖垮可用性。换句话说，它不是传统的高复杂利用，而是一次输入处理边界没守住导致的远程 DoS。'
+        if 'arcadedb' in title_lower:
+            return '这条公告的严重性在于 ArcadeDB 同时踩中了两个权限问题：一是数据库级访问映射初始化异常导致 allow-all 效果，二是新建数据库时没把安全配置正确挂上去，结果让同一台服务器上的跨库读写和 schema 变更都可能被越权完成。它不是单点小 bug，而是会直接打穿多数据库隔离边界。'
         if 'contras' in title_lower or 'contrast cli' in title_lower:
             return '这条高危公告指向 Contrast CLI 生成策略中的 CopyFile 校验缺口。风险不只是普通文件覆盖，而是宿主机上具备特定连接能力的进程可能借此改写来宾系统关键文件，甚至进一步造成敏感数据泄露和 guest takeover。'
         if 'kirby cms' in title_lower:
@@ -572,9 +619,15 @@ def _generate_source_specific_summary(title: str, source_type: str, source_name:
 
 def _normalize_summary_main(card_summary: str, hint: str, summary_zh: str, body_quality: str, *, source_type: str = '', summary_basis: str = '', title: str = '') -> str:
     zh_candidates = [summary_zh, card_summary, hint]
+    weak_markers = [
+        '这条内容当前更像一个社区讨论入口',
+        '这条内容值得关注，因为它对应的是一个更具体的工程、产品或行业变化',
+        '这是一条官方发布，主要内容是：',
+        '这条内容对应的是一则需要尽快核查影响面的安全公告',
+    ]
     for candidate in zh_candidates:
         text = str(candidate or '').strip()
-        if text and _looks_like_good_zh_summary(text):
+        if text and _looks_like_good_zh_summary(text) and not any(m in text for m in weak_markers):
             return _trim_text(text, 220)
 
     targeted = _metadata_summary_by_source(source_type, ' '.join([str(title or ''), str(summary_zh or ''), str(card_summary or ''), str(hint or '')]).strip())
@@ -587,12 +640,16 @@ def _normalize_summary_main(card_summary: str, hint: str, summary_zh: str, body_
         return _metadata_summary_by_source(source_type, summary_zh or card_summary or hint)
     if summary_basis == 'partial_text':
         best = str(summary_zh or card_summary or hint or '').strip()
-        if best and not _looks_like_raw_page_dump(best):
+        if best and not _looks_like_raw_page_dump(best) and not any(m in best for m in weak_markers):
             return _trim_text(best, 220)
+        if targeted and _looks_chinese(targeted):
+            return _trim_text(targeted, 220)
+        if _looks_chinese(title):
+            return _trim_text(title, 220)
         return '从目前抓到的内容看，这条主要在讲一个仍有待补充细节的技术或产品主题，现阶段可以先把握主线，再等待更完整正文补齐背景。'
     for candidate in zh_candidates:
         text = str(candidate or '').strip()
-        if text and _looks_chinese(text) and not _is_weak_summary(text):
+        if text and _looks_chinese(text) and not _is_weak_summary(text) and not any(m in text for m in weak_markers):
             return _trim_text(text, 220)
     if body_quality in {'missing', 'thin'}:
         return _trim_text(targeted or '这条内容目前正文依据偏弱，现阶段还需要更完整的正文或更多来源补充，但已经能看出它对应的是一个值得继续跟进的具体主题。', 220)
@@ -628,29 +685,62 @@ def _rewrite_summary_from_body(title: str, body: str, fallback: str = '') -> str
 def _metadata_summary_by_source(source_type: str, text: str) -> str:
     base = _trim_text(str(text or '').strip(), 180)
     lower = str(text or '').lower()
+    def _clean_candidate(candidate: str) -> str:
+        candidate = str(candidate or '').strip()
+        blocked = [
+            '这条内容值得关注',
+            '这条内容当前更像一个社区讨论入口',
+            '它属于官方/监管信号',
+            '这条内容对应的是一则需要尽快核查影响面的安全公告',
+            '链接内容主要围绕',
+            '这是一条官方发布，主要内容是：',
+        ]
+        for mark in blocked:
+            if mark in candidate:
+                candidate = candidate.split(mark, 1)[0].strip()
+        candidate = re.sub(r'\s+', ' ', candidate).strip(' ，,；;：:。')
+        return candidate
     if 'deepclaude' in lower:
-        return '这是一个把 Claude Code 的 agent 工作流接到 DeepSeek V4 Pro、OpenRouter 等兼容后端上的开源方案，核心卖点是在尽量保留原有使用体验的前提下，把编码代理的调用成本显著压低。'
+        return '这是一个把 Claude Code 的 agent 工作流接到 DeepSeek V4 Pro、OpenRouter 等兼容后端上的开源方案，重点是尽量不改原有使用习惯，同时把代理式编码的模型成本压低。'
     if 'opencode' in lower:
-        return '这条内容讨论的是一个开源 AI coding agent 项目，重点不只是“又一个 agent”，而是它想把代码生成、工具调用和开发流程编排做成一个更可控、可替换的开源方案。'
+        return '这条内容讨论的是一个开源 AI coding agent，核心不只是“又一个 agent”，而是它想把代码生成、工具调用和开发流程编排做成一个更可控、可替换的开源方案。'
     if 'copilot coding agent' in lower:
-        return '这条内容围绕 GitHub Copilot 的 coding agent 能力展开，讨论焦点已经从自动补全延伸到让代理参与完整开发流程后，团队该如何设置测试边界、代码审查和人工接管机制。'
+        return '这条内容围绕 GitHub Copilot 的 coding agent 展开，讨论重点已经从自动补全延伸到让 AI 参与完整开发流程后，团队该如何设置测试边界、代码审查和人工接管机制。'
     if 'cloud demand shifts toward ai' in lower:
-        return '这条内容讲的是企业上云需求正进一步向 AI 相关负载倾斜，重点信号不是单一厂商动作，而是企业真实使用场景正在把云资源采购和投入结构推向 AI。'
+        return '这条内容讲的是企业上云需求正在更多转向 AI 负载，云厂商未来的竞争重点也会越来越多落在推理算力、专用芯片和基础设施供给能力上。'
     if 'underdrawings' in lower:
         return '这篇文章介绍了一种先用确定性工具画出文字和数字底稿、再交给生成模型上色的做法，目的是提高 AI 图片里文本、数字和版式结构的准确率。'
     if 'humanoid robot actuators' in lower:
-        return '这条内容围绕人形机器人执行器展开，核心不是泛谈机器人概念，而是在拆解执行器这类底层部件的类型、能力边界以及它们对整机动作表现的影响。'
+        return '这条内容围绕人形机器人执行器展开，重点在解释持续行走带来的冲击、热负载和回驱要求，为什么会逼着行业在执行器方案上逐渐收敛。'
     if 'byomesh' in lower or 'lora mesh radio' in lower:
-        return '这条内容讲的是一个名为 BYOMesh 的 LoRa mesh 无线电项目，卖点是把传统 LoRa 低带宽链路往更高吞吐方向推进，试图让远距离低功耗组网不只适合传感器消息，也能承载更丰富的数据传输。'
+        return '这条内容讲的是一个名为 BYOMesh 的 LoRa mesh 无线电项目，卖点是把传统 LoRa 的低带宽链路往更高吞吐方向推进，试图承载比传感器消息更丰富的数据传输。'
+    if 'keep-codex-fast' in lower:
+        return '这是一个面向 Codex 本地状态维护的 skill，核心思路不是简单清理文件，而是先做交接、再归档，把长期对话、worktree、日志和项目状态从“越积越重”整理成可恢复、可继续接手的结构。它被关注的原因，不只是减负，而是它把 AI 编码助手的长期可维护性当成了一个值得单独设计的问题。'
     if source_type == 'github_high_stars':
-        return '这条内容对应的是一个近期升温的开源项目或工具信号，现阶段最值得关注的是它试图解决什么问题、为什么会被社区快速放大，以及是否值得继续跟踪。'
+        cleaned = _clean_candidate(base)
+        if cleaned and _looks_chinese(cleaned) and len(cleaned) >= 24:
+            return _trim_text(cleaned, 180)
+        return '这是一个近期升温的开源项目，当前更值得先看它具体解决什么问题、采用什么做法，以及为什么会在社区里迅速被放大讨论。'
+    if 'de tld offline due to dnssec' in lower or 'dnssec' in lower:
+        return '这条内容围绕 .de 域名体系疑似因 DNSSEC 信任链或签名配置异常而出现可用性问题展开。虽然当前能抓到的更多是分析工具输出，但讨论焦点已经很明确：底层域名解析链一旦在 DNSSEC 这层出错，影响会直接放大成大范围访问异常。'
     if source_type == 'hackernews_top':
-        return '这条内容主要在讲一个正在开发者社区被关注的项目、方法或观点，重点应放在它具体讲了什么，而不是页面里的零碎导航信息。'
+        cleaned = _clean_candidate(base)
+        if cleaned and _looks_chinese(cleaned) and len(cleaned) >= 24:
+            return _trim_text(cleaned, 180)
+        return '这条 Hacker News 热门内容目前更适合先概括它讨论的核心主题、涉及的技术点或观点主线，再决定是否继续深挖原文。'
     if source_type == 'github_advisory':
-        return '这条内容对应的是一则需要尽快核查影响面的安全公告，重点在确认受影响版本、利用条件和短期缓解动作。'
+        cleaned = _clean_candidate(base)
+        if cleaned and _looks_chinese(cleaned) and len(cleaned) >= 24:
+            return _trim_text(cleaned, 180)
+        return '这是一则安全公告，稳定写法应该直接交代漏洞触发条件、受影响组件、可能造成的结果，以及短期可行的修复或缓解方向。'
+    if 'retirement plans for small businesses' in lower or 'pooled employer plans' in lower:
+        return '这条 SEC 信息讲的是两大部门联合发布工作人员指引，回应联邦证券法在 pooled employer plans（PEPs）这类面向中小企业的退休计划中的适用问题。重点不在市场情绪，而在监管层如何界定这类退休计划产品的证券法适用边界，以及相关参与方后续应如何理解合规责任。'
+    if 'semiannual reporting' in lower and 'public companies' in lower:
+        return '这条 SEC 新闻稿讲的是拟议放宽上市公司中期披露节奏：允许企业选择提交半年报，而不是继续按季度提交中期报告。它影响的重点是上市公司信息披露频率、合规负担和投资者获取公司阶段性经营信息的节奏。'
     if source_type in {'tavily_skill', 'tavily_search'}:
-        return '这条内容来自外部搜索结果，核心应先落在它实际讲的产品、行业变化或技术主题上，而不是停留在“值得继续观察”的空泛判断。'
-    return base or '这条内容当前可直接确认的信息有限，但仍能作为一个值得继续核实的观察信号。'
+        return '这条内容来自外部搜索结果，重点应该先落在它实际讲的产品、行业变化或技术主题上，而不是停留在空泛判断。'
+    cleaned = _clean_candidate(base)
+    return cleaned or '当前可直接确认的正文信息还有限，这里先按已能确定的主题主线做保守概括。'
 
 
 def _looks_like_raw_page_dump(text: str) -> bool:
@@ -658,7 +748,8 @@ def _looks_like_raw_page_dump(text: str) -> bool:
     bad = [
         'sign in', 'navigation menu', 'github copilot', 'portfolio documentation', 'table of contents', 'back to top',
         'write better code with ai', 'build and deploy intelligent apps', 'manage and compare prompts', 'instant dev environments',
-        '| hacker news', 'open source ai coding agent opencode was the first open source agent i used'
+        '| hacker news', 'open source ai coding agent opencode was the first open source agent i used',
+        '根据已抓取到的正文', '根据标题和摘要可见', '正文显示，这条内容主要讲的是'
     ]
     return any(x in lower for x in bad)
 
@@ -689,20 +780,32 @@ def _normalize_why_it_matters(existing: str, title: str, source_type: str, sourc
 
 def _build_key_points(title: str, source_type: str, source_name: str, body: str, summary_main: str, *, summary_basis: str = '', body_quality: str = '') -> List[str]:
     points: List[str] = []
+    lower = f'{title} {body}'.lower()
     if summary_basis == 'metadata_only':
         if source_type == 'github_high_stars':
+            if 'keep-codex-fast' in lower:
+                return [
+                    '它关注的不是生成能力本身，而是 AI 编码助手长期使用后的本地状态膨胀问题。',
+                    '核心方法是先做 handoff，再归档旧会话、worktree 和日志，而不是直接删除。',
+                    '这类项目被关注，说明大家开始把“AI 工具怎么长期维护”当成独立问题来解决。',
+                ]
             return [
                 '它当前更像一个近期升温的项目或工具信号，重点是看它到底在解决什么实际问题。',
                 '社区转发、加星和讨论热度说明它已经引起关注，但不代表方案本身已经被充分验证。',
                 '如果后续还要继续保留，最好补充 README 主体或更多外部介绍来提高摘要确定性。',
             ]
         if source_type == 'hackernews_top':
+            if 'de tld offline due to dnssec' in lower or 'dnssec' in lower:
+                return [
+                    '讨论焦点在于 .de 域名体系疑似出现 DNSSEC 信任链或签名配置异常。',
+                    '这类问题的风险在于它会从单点配置错误迅速放大成整片域名空间的访问异常。',
+                    '它值得关注，不是因为工具页面本身，而是因为它暴露了底层解析体系的脆弱面。',
+                ]
             return [
                 '这条当前更像社区讨论入口，重点是看它为什么会被一批开发者同时拿出来讨论。',
                 '在正文依据不足时，不宜把页面碎片直接当成结论，更适合先把握核心争议点。',
                 '它的晨报价值主要来自讨论原因和关注焦点，而不只是标题本身。',
             ]
-    lower = f'{title} {body}'.lower()
     if 'bluetooth midi' in lower or 'windows midi' in lower:
         points = [
             '作者把蓝牙 MIDI 在 Windows 上“配对成功但软件不可用”的问题拆成多层兼容缺口。',
@@ -710,11 +813,7 @@ def _build_key_points(title: str, source_type: str, source_name: str, body: str,
             '还额外处理了设备接收通道与默认发送通道不一致导致的静默掉音问题。',
         ]
     elif source_type == 'github_advisory' or 'ghsa-' in lower or 'cve-' in lower:
-        points = [
-            '需要先确认受影响版本、利用条件和是否存在公开补丁。',
-            '如果短期无法升级，应至少整理临时缓解方式和暴露面。',
-            '安全公告在晨报中的价值，不只是提醒存在漏洞，而是帮助团队快速形成核查动作。',
-        ]
+        points = []
     elif 'postscript' in lower and 'browser' in lower:
         points = [
             '作者没有重写解释器，而是把历史 ROM 和模拟层一起搬进浏览器。',
@@ -737,11 +836,11 @@ def _build_key_points(title: str, source_type: str, source_name: str, body: str,
         sentences = re.split(r'[。！？]\s*', summary_main)
         for sentence in sentences:
             clean = sentence.strip()
-            if len(clean) >= 16:
+            if len(clean) >= 18 and not any(x in clean for x in ['值得关注', '更像一个社区讨论入口', '适合作为', '帮助团队快速形成核查动作']):
                 points.append(clean + '。')
-            if len(points) >= 3:
+            if len(points) >= 2:
                 break
-    return points[:3]
+    return points[:2]
 
 
 def _is_weak_summary(text: str) -> bool:
@@ -824,8 +923,8 @@ def _story_title(item: Dict[str, Any]) -> str:
 def _build_lead(items: List[Dict[str, Any]]) -> str:
     focuses = [str(item.get('editorial_focus') or '').strip() for item in items[:5]]
     if '安全风险与影响面' in focuses and 'AI Agent 工程化平台' in focuses:
-        return '今天的主线很清楚：一边是 AI Agent 工具链继续向评测、约束和闭环平台演进，另一边是底层基础设施与 AI SDK 的安全边界持续抬高。'
-    return '以下内容已按 Top10 素材重整，并优先保留可直接写成晨报的正文依据。'
+        return '今天的主线很清楚：一边是 Agent 工具链继续向评测、约束和闭环平台演进，另一边是安全公告在提醒大家，底层依赖、权限模型和默认配置同样需要持续补强。'
+    return '以下内容已按 Top10 素材重整，并优先改写为更具体、更完整、可直接阅读的晨报描述。'
 
 
 def _trim_text(text: str, max_chars: int) -> str:
@@ -833,6 +932,13 @@ def _trim_text(text: str, max_chars: int) -> str:
     if len(clean) <= max_chars:
         return clean
     return clean[: max_chars - 3].rstrip() + '...'
+
+
+def _storytone_expand_summary(title: str, seed: str, focus: str, body_quality: str, body: str) -> str:
+    text = _trim_text(str(seed or '').strip(), 220)
+    if not text:
+        return ''
+    return text
 
 
 def _now_iso() -> str:

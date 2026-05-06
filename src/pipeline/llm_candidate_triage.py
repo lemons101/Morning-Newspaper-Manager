@@ -90,10 +90,11 @@ def select_triage_candidates_by_llm(items: List[Dict[str, Any]], *, limit: int =
     ranked = sorted(news_items, key=_rank_key, reverse=True)
 
     fresh_48h = [item for item in ranked if _hours_since_published(item) is not None and _hours_since_published(item) <= 48]
-    fallback_recent = [item for item in ranked if item not in fresh_48h and (_hours_since_published(item) is None or _hours_since_published(item) <= 96)]
-    stale = [item for item in ranked if item not in fresh_48h and item not in fallback_recent]
+    fallback_recent = [item for item in ranked if item not in fresh_48h and _hours_since_published(item) is not None and _hours_since_published(item) <= 96]
+    unresolved_time = [item for item in ranked if item not in fresh_48h and item not in fallback_recent and _hours_since_published(item) is None]
+    stale = [item for item in ranked if item not in fresh_48h and item not in fallback_recent and item not in unresolved_time]
 
-    selected = (fresh_48h + fallback_recent + stale)[:max(1, limit)]
+    selected = (fresh_48h + fallback_recent + unresolved_time + stale)[:max(1, limit)]
     rows = []
     for idx, item in enumerate(selected, 1):
         row = dict(item)
@@ -237,11 +238,13 @@ def _rank_key(item: Dict[str, Any]) -> tuple:
     priority_rank = {'Urgent': 3, 'Important': 2, 'FYI': 1}.get(priority, 0)
     freshness_rank = _freshness_rank(item)
     topical_penalty = _topic_penalty(item)
+    time_penalty = _time_confidence_penalty(item)
     return (
         keep_rank,
         freshness_rank,
         priority_rank,
         topical_penalty,
+        time_penalty,
         int(item.get('candidate_score') or 0),
         int(item.get('heat_score') or 0),
         int(item.get('quality_score') or 0),
@@ -269,7 +272,7 @@ def _hours_since_published(item: Dict[str, Any]) -> float | None:
 def _freshness_rank(item: Dict[str, Any]) -> int:
     hours = _hours_since_published(item)
     if hours is None:
-        return 1
+        return 0 if str(item.get('source_type') or '').strip() in {'tavily_skill', 'tavily_search'} else 1
     if hours <= 24:
         return 4
     if hours <= 48:
@@ -277,6 +280,14 @@ def _freshness_rank(item: Dict[str, Any]) -> int:
     if hours <= 96:
         return 2
     return 1
+
+
+def _time_confidence_penalty(item: Dict[str, Any]) -> int:
+    source_type = str(item.get('source_type') or '').strip()
+    hours = _hours_since_published(item)
+    if hours is None and source_type in {'tavily_skill', 'tavily_search'}:
+        return -2
+    return 0
 
 
 def _topic_penalty(item: Dict[str, Any]) -> int:

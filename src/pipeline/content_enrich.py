@@ -148,6 +148,7 @@ def _build_fetch_result(*, raw_text: str, clean_text: str, status: str, basis: s
         "summary_basis": basis,
         "content_quality": quality,
         "extract_quality_reason": reason,
+        "content_basis": basis,
     }
 
 
@@ -290,12 +291,12 @@ def _build_summary_llm(item: Dict[str, Any], body: str) -> str:
     title = str(item.get("title", "")).strip()
     summary = str(item.get("summary", "")).strip()
     basis = str(item.get("summary_basis", "metadata_only"))
-    body_excerpt = _first_meaningful_excerpt(body or summary or title, 420)
+    body_excerpt = _first_meaningful_excerpt(body or summary or title, 320)
     if basis == "full_text":
-        return f"正文显示，这条内容主要讲的是：{body_excerpt}"
+        return body_excerpt
     if basis == "partial_text":
-        return f"根据已抓取到的部分正文，这条内容主要讲的是：{body_excerpt}"
-    return f"根据标题和摘要可见，这条内容主要涉及：{body_excerpt}"
+        return body_excerpt
+    return body_excerpt
 
 
 def _first_meaningful_excerpt(text: str, limit: int) -> str:

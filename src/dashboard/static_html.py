@@ -58,6 +58,8 @@ def _render_html(data: Dict[str, Any]) -> str:
     .title-en {{ color: #98a2b3; font-size: 12px; line-height: 1.5; margin-bottom: 12px; }}
     .summary {{ line-height: 1.82; color: #344054; margin: 0 0 14px; font-size: 15px; }}
     .label {{ color: #344054; font-weight: 700; }}
+    .points {{ margin: 10px 0 14px 0; padding-left: 20px; color: #475467; }}
+    .points li {{ margin: 6px 0; line-height: 1.7; }}
     .meta {{ display: flex; flex-wrap: wrap; gap: 12px 18px; margin-top: 10px; }}
     .row {{ color: #667085; font-size: 13px; background: #f8fafc; border: 1px solid #eef2f6; border-radius: 999px; padding: 6px 10px; }}
     .link {{ display: inline-block; margin-top: 14px; color: #175cd3; font-weight: 700; text-decoration: none; border: 1px solid #c7d7fe; border-radius: 10px; padding: 8px 12px; background: #f5f8ff; }}
@@ -135,14 +137,20 @@ def _items(items: Iterable[Dict[str, Any]], *, empty_text: str) -> str:
         source = escape(str(item.get("source_name", "-")))
         summary = escape(str(item.get("summary_zh") or item.get("summary", "")))
         published_at = escape(str(item.get("published_at", "")))
+        key_points = item.get("key_points") or []
+        if not isinstance(key_points, list):
+            key_points = []
+        point_items = ''.join(f'<li>{escape(str(point))}</li>' for point in key_points[:3] if str(point).strip())
+        points_html = f'<ul class="points">{point_items}</ul>' if point_items else ''
         url = str(item.get("url", "")).strip()
         link = f'<a class="link" href="{escape(url)}" target="_blank">访问链接</a>' if url and not url.startswith("mail:") else '<span class="nolink">邮件事项无外部链接</span>'
         chunks.append(
             f"""<div class="item">
   <div class="head"><span>#{escape(str(item.get("rank", "-")))}</span><span class="badge {priority}">{priority}</span><span class="muted">{source}</span></div>
   <div class="title">{icon} {title}</div>
-  {f'<div class="title-en">英文原题:{title_en}</div>' if title_en else ''}
+  {f'<div class="title-en">英文原题: {title_en}</div>' if title_en and title_en != title else ''}
   <p class="summary"><span class="label">主要内容:</span>{summary}</p>
+  {points_html}
   <div class="meta">
     <div class="row"><span class="label">来源</span> · {source}</div>
     <div class="row"><span class="label">发布时间</span> · {published_at or "-"}</div>

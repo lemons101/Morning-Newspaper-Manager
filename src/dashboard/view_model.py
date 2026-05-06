@@ -102,17 +102,25 @@ def _to_display_item(item: Dict[str, Any], rank: int) -> Dict[str, Any]:
         summary_zh = first_key_point
     if not _looks_like_good_chinese_summary(summary_zh):
         editorial_hint = str(item.get("editorial_summary_hint") or "").strip()
-        if _looks_like_good_chinese_summary(editorial_hint):
+        if _looks_like_good_chinese_summary(editorial_hint) and _looks_like_content_summary(editorial_hint):
             summary_zh = editorial_hint
     if not _looks_like_good_chinese_summary(summary_zh):
-        summary_zh = str(item.get("why_it_matters") or "").strip() if _looks_like_good_chinese_summary(str(item.get("why_it_matters") or "").strip()) else ""
+        candidate_summary = str(item.get("summary_zh") or "").strip()
+        summary_zh = candidate_summary if _looks_like_content_summary(candidate_summary) else ""
     if not _looks_like_good_chinese_summary(summary_zh):
-        summary_zh = str(item.get("summary_zh") or "").strip()
+        summary_zh = ""
     if not _looks_like_good_chinese_summary(summary_zh):
         summary_zh = _summary_zh(title, summary, source_type, source_name, channel, item)
+    if not _looks_like_content_summary(summary_zh):
+        editorial_hint = str(item.get("editorial_summary_hint") or "").strip()
+        alt_summary = str(item.get("summary_zh") or "").strip()
+        for candidate in [editorial_hint, alt_summary]:
+            if _looks_like_content_summary(candidate):
+                summary_zh = candidate
+                break
     summary_en = str(item.get("summary_en") or "").strip() or summary
     why_it_matters = str(item.get("why_it_matters") or "").strip()
-    key_points = [str(point).strip() for point in key_points if str(point).strip()]
+    key_points = _dedupe_key_points(summary_zh, [str(point).strip() for point in key_points if str(point).strip()])
 
     original_rank = int(item.get("rank", rank) or rank)
     return {
@@ -165,7 +173,7 @@ def _build_lead_bullets(final_newspaper: Dict[str, Any], top10: List[Dict[str, A
         if not _looks_like_good_chinese_summary(summary):
             summary = str(item.get('why_it_matters') or '').strip() if _looks_like_good_chinese_summary(str(item.get('why_it_matters') or '').strip()) else ''
         if not _looks_like_good_chinese_summary(summary):
-            summary = _trim_text(str(item.get('summary_en') or item.get('summary') or ''), 90)
+            summary = _trim_text(str(item.get('summary_en') or item.get('summary') or ''), 140)
         lead_text = summary or first_point
         if not title:
             continue
@@ -198,7 +206,7 @@ def _topic_icon(item: Dict[str, Any]) -> str:
     return '✨'
 
 
-def _trim_lead_summary(text: str, limit: int = 90) -> str:
+def _trim_lead_summary(text: str, limit: int = 140) -> str:
     clean = re.sub(r'\s+', ' ', str(text or '').strip())
     if not clean:
         return ''
@@ -206,6 +214,57 @@ def _trim_lead_summary(text: str, limit: int = 90) -> str:
         return clean
     cut = clean[:limit].rstrip(' ，,;；:：')
     return cut + '…'
+
+
+def _normalize_compare_text(text: str) -> str:
+    clean = re.sub(r'\s+', '', str(text or ''))
+    clean = re.sub(r'[“”"‘’'"'"'`·,，。；;：:（）()\-—_]', '', clean)
+    return clean
+
+
+def _dedupe_key_points(summary: str, points: List[str]) -> List[str]:
+    summary_norm = _normalize_compare_text(summary)
+    kept: List[str] = []
+    seen: List[str] = []
+    for point in points:
+        point_text = str(point).strip()
+        if not point_text:
+            continue
+        point_norm = _normalize_compare_text(point_text)
+        if not point_norm:
+            continue
+        if summary_norm and (point_norm in summary_norm or summary_norm in point_norm):
+            continue
+        if any(point_norm in prev or prev in point_norm for prev in seen):
+            continue
+        kept.append(point_text)
+        seen.append(point_norm)
+    return kept[:3]
+
+
+def _looks_like_content_summary(text: str) -> bool:
+    text = str(text or '').strip()
+    if not text:
+        return False
+    bad_prefixes = [
+        '这条内容值得关注',
+        '这条内容当前更像一个社区讨论入口',
+        '它属于官方/监管信号',
+        '这条内容对应的是一则需要尽快核查影响面的安全公告',
+        '链接内容主要围绕',
+        '这是一条官方发布，主要内容是：',
+        '这条内容当前更适合先概括',
+        '这是一个近期升温的开源项目',
+        '这是一则安全公告',
+        '当前可直接确认的正文信息还有限',
+    ]
+    bad_contains = [
+        '它之所以能进今天的候选',
+        '适合作为补充阅读而不是主线内容',
+        '帮助团队快速形成核查动作',
+        '为什么会被开发者集中讨论',
+    ]
+    return (not any(text.startswith(x) for x in bad_prefixes)) and (not any(x in text for x in bad_contains))
 
 
 def _looks_like_good_chinese_summary(text: str) -> bool:
@@ -217,6 +276,11 @@ def _looks_like_good_chinese_summary(text: str) -> bool:
         'Websmith Home',
         'Running Adobe',
         '| Hacker News',
+        '这条内容值得关注，因为它对应的是一个更具体的工程、产品或行业变化，而不只是表面上的热闹话题。',
+        '该信息值得关注，可作为今日早报的背景材料。',
+        '这条内容当前更像一个社区讨论入口，重点不是页面碎片本身，而是先把它到底在讲什么、为什么会被开发者集中讨论这两件事讲清楚。',
+        '这是一条官方发布，主要内容是：',
+        '这条内容对应的是一则需要尽快核查影响面的安全公告，重点是确认受影响版本、利用条件以及短期缓解动作。',
     ]
     if any(x in text for x in bad_signals):
         return False
