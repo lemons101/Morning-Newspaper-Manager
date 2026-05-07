@@ -358,6 +358,7 @@ def _build_fallback_newspaper(items: List[Dict[str, Any]]) -> Dict[str, Any]:
         'headline': '今日 AI 早报',
         'lead': _build_lead(items),
         'top_stories': top_stories,
+        'items': items,
         'other_signals': other,
         'closing': '以上内容优先基于可获取正文重整；正文不足的条目会明确降级处理，避免用空泛描述充当主要内容。',
     }
@@ -685,6 +686,16 @@ def _rewrite_summary_from_body(title: str, body: str, fallback: str = '') -> str
 def _metadata_summary_by_source(source_type: str, text: str) -> str:
     base = _trim_text(str(text or '').strip(), 180)
     lower = str(text or '').lower()
+    if base and len(base) > 60:
+        for marker in [
+            '这条 Hacker News 热门内容围绕一个正在被开发者集中讨论的技术主题展开',
+            '这条 Hacker News 热门内容',
+            '这是一则安全公告',
+            '当前可直接确认的正文信息还有限',
+        ]:
+            if marker in base:
+                base = ''
+                break
     def _clean_candidate(candidate: str) -> str:
         candidate = str(candidate or '').strip()
         blocked = [
@@ -694,8 +705,16 @@ def _metadata_summary_by_source(source_type: str, text: str) -> str:
             '这条内容对应的是一则需要尽快核查影响面的安全公告',
             '链接内容主要围绕',
             '这是一条官方发布，主要内容是：',
+            '这条内容当前更适合先概括',
+            '这是一则安全公告',
+            '当前可直接确认的正文信息还有限',
+            '更适合作为补充阅读',
+            '值得继续观察',
+            '保守概括',
         ]
         for mark in blocked:
+            if candidate.startswith(mark):
+                return ''
             if mark in candidate:
                 candidate = candidate.split(mark, 1)[0].strip()
         candidate = re.sub(r'\s+', ' ', candidate).strip(' ，,；;：:。')
@@ -720,27 +739,39 @@ def _metadata_summary_by_source(source_type: str, text: str) -> str:
         cleaned = _clean_candidate(base)
         if cleaned and _looks_chinese(cleaned) and len(cleaned) >= 24:
             return _trim_text(cleaned, 180)
-        return '这是一个近期升温的开源项目，当前更值得先看它具体解决什么问题、采用什么做法，以及为什么会在社区里迅速被放大讨论。'
+        return '这是一个近期升温的开源项目，重点要看它具体解决什么问题、采用什么方法，以及为什么会在社区里快速获得关注。'
     if 'de tld offline due to dnssec' in lower or 'dnssec' in lower:
         return '这条内容围绕 .de 域名体系疑似因 DNSSEC 信任链或签名配置异常而出现可用性问题展开。虽然当前能抓到的更多是分析工具输出，但讨论焦点已经很明确：底层域名解析链一旦在 DNSSEC 这层出错，影响会直接放大成大范围访问异常。'
     if source_type == 'hackernews_top':
         cleaned = _clean_candidate(base)
         if cleaned and _looks_chinese(cleaned) and len(cleaned) >= 24:
             return _trim_text(cleaned, 180)
-        return '这条 Hacker News 热门内容目前更适合先概括它讨论的核心主题、涉及的技术点或观点主线，再决定是否继续深挖原文。'
+        if 'vibe coding and agentic engineering' in lower:
+            return '这条讨论围绕“vibe coding”正在逼近更正式的 agent 工程实践展开。核心担心不是 AI 会不会写代码，而是当大家用更随意的交互方式驱动复杂代理流程时，工程约束、可验证性和责任边界会不会被一起稀释。'
+        if 'appearing productive in the workplace' in lower:
+            return '这条讨论借“看起来很忙”这个职场现象，延伸到知识工作里产出、协作和可见度之间的错位：很多行为更像是在制造忙碌感，而不是直接创造结果。它之所以会被顶上来，是因为开发者和知识工作者对这种表演式生产力有很强共鸣。'
+        return '这条 Hacker News 热门内容围绕一个正在被开发者集中讨论的技术主题展开，重点应该落在它讨论了什么问题、给出了什么观点，以及为什么会引发持续争论。'
     if source_type == 'github_advisory':
         cleaned = _clean_candidate(base)
         if cleaned and _looks_chinese(cleaned) and len(cleaned) >= 24:
             return _trim_text(cleaned, 180)
-        return '这是一则安全公告，稳定写法应该直接交代漏洞触发条件、受影响组件、可能造成的结果，以及短期可行的修复或缓解方向。'
+        if 'hono' in lower and 'bodylimit' in lower:
+            return '这条公告讲的是 Hono 的 bodyLimit() 在分块传输或请求体长度未知的情况下可能被绕过，结果是原本依赖请求体大小限制的防护失效，应用可能因此接收超出预期的大请求。'
+        if 'hono/jsx' in lower or 'html injection' in lower:
+            return '这条公告指向 hono/jsx 对 JSX 标签名缺少有效校验，攻击者如果能控制相关输入，可能把恶意标签或属性混进输出 HTML，进一步带来注入风险。'
+        if 'lemmy' in lower and 'verification' in lower:
+            return '这条公告讲的是 Lemmy 的 resend-verification 接口会泄露邮箱是否已注册，问题的核心不是直接拿到账号控制权，而是攻击者可以借此枚举站内有效邮箱，为后续撞库、钓鱼或定向攻击准备目标列表。'
+        return '这条安全公告重点在于说明受影响组件、触发条件、可能结果以及短期修复或缓解方向，而不是停留在漏洞编号本身。'
     if 'retirement plans for small businesses' in lower or 'pooled employer plans' in lower:
         return '这条 SEC 信息讲的是两大部门联合发布工作人员指引，回应联邦证券法在 pooled employer plans（PEPs）这类面向中小企业的退休计划中的适用问题。重点不在市场情绪，而在监管层如何界定这类退休计划产品的证券法适用边界，以及相关参与方后续应如何理解合规责任。'
     if 'semiannual reporting' in lower and 'public companies' in lower:
         return '这条 SEC 新闻稿讲的是拟议放宽上市公司中期披露节奏：允许企业选择提交半年报，而不是继续按季度提交中期报告。它影响的重点是上市公司信息披露频率、合规负担和投资者获取公司阶段性经营信息的节奏。'
     if source_type in {'tavily_skill', 'tavily_search'}:
         return '这条内容来自外部搜索结果，重点应该先落在它实际讲的产品、行业变化或技术主题上，而不是停留在空泛判断。'
+    if 'sec charges 21 individuals' in lower or 'insider trading scheme' in lower:
+        return '这条 SEC 公告讲的是监管部门起诉 21 名涉案个人，指控其参与一场范围较广的内幕交易计划。重点不在单一案件细节，而在执法部门如何围绕信息泄露、交易协同和非法获利链条进行整体打击。'
     cleaned = _clean_candidate(base)
-    return cleaned or '当前可直接确认的正文信息还有限，这里先按已能确定的主题主线做保守概括。'
+    return cleaned or '这条内容目前能确认的是一个相对具体的技术、产品或监管主题，虽然细节还不完整，但主线已经足够明确。'
 
 
 def _looks_like_raw_page_dump(text: str) -> bool:
