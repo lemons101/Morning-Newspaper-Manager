@@ -9,6 +9,8 @@ cd "$PROJECT_ROOT"
 python3 src/pipeline/collect.py --project-root "$PROJECT_ROOT"
 python3 "$PROJECT_ROOT/scripts/rebuild_dashboard.py" "$PROJECT_ROOT"
 python3 "$PROJECT_ROOT/scripts/check_newspaper_quality.py" "$PROJECT_ROOT"
+python3 "$PROJECT_ROOT/scripts/audit_newspaper_runtime.py" "$PROJECT_ROOT"
 
 echo "[OK] daily newspaper regenerated"
 echo "[OK] html: $PROJECT_ROOT/runtime/dashboard.html"
+echo "[OK] audit: runtime/top10_editorial_ready.json + final_newspaper.json + dashboard.html"

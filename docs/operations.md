@@ -64,7 +64,10 @@ cd /root/projects/Morning-Newspaper-Manager
 任务目标：
 
 - 重跑整条晨报生成链
+- 重新生成 `top10_editorial_ready.json`
+- 重新生成 `final_newspaper.json`
 - 覆盖当天 `runtime/dashboard.html`
+- 运行质量检查与 runtime 审计
 
 ### 3.2 每日 08:05 自动推送给用户
 推送内容：
@@ -72,6 +75,11 @@ cd /root/projects/Morning-Newspaper-Manager
 - 今日晨报已更新
 - 3 条今日看点
 - 固定链接
+
+注意：**推送不在 `scripts/run_daily_newspaper.sh` 里完成**。它应由 OpenClaw 的 cron / 会话消息链单独负责。也就是说：
+
+- `run_daily_newspaper.sh` 负责“生成与自检”
+- OpenClaw cron 负责“按时发出去”
 
 固定链接：
 
@@ -134,6 +142,8 @@ cd /root/projects/Morning-Newspaper-Manager
 - 每日 08:00 任务是否执行
 - 执行时是否报错
 - `runtime/dashboard.html` 是否被新的生成结果覆盖
+- `python3 scripts/audit_newspaper_runtime.py` 是否通过
+- 08:05 的推送任务是否单独执行成功
 
 ---
 
@@ -167,10 +177,11 @@ cd /root/projects/Morning-Newspaper-Manager
 
 ---
 
-## 8. 维护者应优先记住的 5 件事
+## 8. 维护者应优先记住的 6 件事
 
 1. `top10_editorial_ready.json` 是最关键的中间层。
-2. `dashboard.html` 是当前主交付物。
-3. 8510 是固定分享入口，不要轻易切换。
-4. 这套系统现在是“按天覆盖更新”，不是历史归档系统。
-5. 先稳住链路，再追求更复杂的生成与推送能力。
+2. `final_newspaper.json` 必须和页面层接口对齐，不能再缺 `items`。
+3. `dashboard.html` 是当前主交付物。
+4. 8510 是固定分享入口，不要轻易切换。
+5. 这套系统现在是“按天覆盖更新”，不是历史归档系统。
+6. 生成链与推送链要分开维护：先保证生成稳定，再保证 cron 推送稳定。

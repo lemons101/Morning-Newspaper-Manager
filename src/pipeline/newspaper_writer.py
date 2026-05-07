@@ -756,6 +756,8 @@ def _metadata_summary_by_source(source_type: str, text: str) -> str:
             return '这条讨论借“看起来很忙”这个职场现象，延伸到知识工作里产出、协作和可见度之间的错位：很多行为更像是在制造忙碌感，而不是直接创造结果。它之所以会被顶上来，是因为开发者和知识工作者对这种表演式生产力有很强共鸣。'
         if 'steam controller cad files' in lower or 'valve releases steam controller cad files' in lower:
             return '这条内容讲的是 Valve 把 Steam Controller 的 CAD 设计文件以 Creative Commons 许可公开出来，等于把这款老硬件的一部分结构资料正式开放给社区。它的意义不在一条普通公司新闻，而在于官方主动降低了玩家、维修者和二次创作者做复刻、改件和周边适配的门槛。'
+        if 'google cloud fraud defense' in lower or 'next evolution of recaptcha' in lower:
+            return '这条内容讲的是 Google Cloud 把反欺诈能力进一步产品化，作为 reCAPTCHA 之后的新一代风控方案来对外提供。重点不是再做一次验证码升级，而是把设备、行为、请求上下文等多维信号一起纳入判断，用来更早识别账号盗用、批量注册和支付欺诈这类自动化攻击。'
         return '这条 Hacker News 热门内容围绕一个正在被开发者集中讨论的技术主题展开，重点应该落在它讨论了什么问题、给出了什么观点，以及为什么会引发持续争论。'
     if source_type == 'github_advisory':
         cleaned = _clean_candidate(base)
