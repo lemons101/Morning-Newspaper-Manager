@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import json
 from pathlib import Path
 import re
@@ -17,7 +17,7 @@ def build_dashboard_payload(runtime_dir: Path) -> Dict[str, Any]:
     editorial_top10 = _safe_items(_read_json(runtime_dir / "top10_editorial_ready.json"))
     top10 = editorial_top10 or ai_top10 or enriched_top10 or rule_top10
     final_newspaper = _read_json(runtime_dir / "final_newspaper.json")
-    mail_alerts = _safe_items(_read_json(runtime_dir / "mail_alerts.json"))
+    mail_alerts = _filter_active_mail_alerts(_safe_items(_read_json(runtime_dir / "mail_alerts.json")))
     source_report = _read_json(runtime_dir / "source_report.json")
 
     urgent_count = sum(1 for item in triaged if _priority(item) == "Urgent")
@@ -58,6 +58,44 @@ def _read_json(path: Path) -> Dict[str, Any]:
     except Exception:
         return {}
     return payload if isinstance(payload, dict) else {}
+
+
+def _filter_active_mail_alerts(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    now = datetime.now(timezone.utc)
+    kept: List[Dict[str, Any]] = []
+    for item in items:
+        if str(item.get("source_type") or "").strip() != "mail_alerts":
+            kept.append(item)
+            continue
+        text = " ".join([
+            str(item.get("title") or ""),
+            str(item.get("summary") or ""),
+            str(item.get("short_summary") or ""),
+        ])
+        event_dt = _extract_mail_event_datetime(text)
+        if event_dt is not None and event_dt < now - timedelta(hours=2):
+            continue
+        kept.append(item)
+    return kept
+
+
+def _extract_mail_event_datetime(text: str) -> datetime | None:
+    text = str(text or "")
+    patterns = [
+        r"(20\d{2})年(\d{1,2})月(\d{1,2})日(?:晚|上午|下午)?(\d{1,2})[:：](\d{2})",
+        r"(20\d{2})-(\d{1,2})-(\d{1,2})[ T](\d{1,2}):(\d{2})",
+    ]
+    for pattern in patterns:
+        m = re.search(pattern, text)
+        if not m:
+            continue
+        try:
+            year, month, day, hour, minute = map(int, m.groups())
+            dt = datetime(year, month, day, hour, minute, tzinfo=timezone(timedelta(hours=8)))
+            return dt.astimezone(timezone.utc)
+        except Exception:
+            continue
+    return None
 
 
 def _safe_items(payload: Dict[str, Any]) -> List[Dict[str, Any]]:

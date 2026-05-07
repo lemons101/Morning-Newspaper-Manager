@@ -551,6 +551,8 @@ def _normalize_title_zh(card_title: str, raw_title: str, source_type: str, sourc
 def _generate_source_specific_summary(title: str, source_type: str, source_name: str, body: str, summary_zh: str, hint: str, body_quality: str) -> str:
     title_lower = title.lower()
     body_clean = _clean_body(body)
+    if source_type == 'github_high_stars' and 'cheat-on-content' in title_lower:
+        return '这个项目想做的不是普通的爆款文案生成器，而是把短视频与内容增长里的选题、结构、钩子和传播规律整理成一套可复用的方法库。它更像一个面向内容操盘手的分析与复制工具，目标是减少“全靠感觉发内容”的不确定性。'
     if source_type == 'hackernews_top':
         if 'bluetooth midi' in title_lower or 'windows midi' in title_lower:
             return '这是一款面向 Windows 的开源小工具，目标是把蓝牙 BLE MIDI 键盘稳定接入 Windows MIDI Services，让 DAW 和 Web MIDI 应用像使用有线设备一样识别无线键盘。作者把配对成功但软件不可见、电脑回传音符无声以及接收通道不一致等问题拆成了可复现、可修复的工程方案。'
@@ -737,6 +739,8 @@ def _metadata_summary_by_source(source_type: str, text: str) -> str:
         return '这是一个面向 Codex 本地状态维护的 skill，核心思路不是简单清理文件，而是先做交接、再归档，把长期对话、worktree、日志和项目状态从“越积越重”整理成可恢复、可继续接手的结构。它被关注的原因，不只是减负，而是它把 AI 编码助手的长期可维护性当成了一个值得单独设计的问题。'
     if source_type == 'github_high_stars':
         cleaned = _clean_candidate(base)
+        if 'cheat-on-content' in lower:
+            return '这个项目主打把短视频/内容分发里的选题、结构、钩子和传播规律拆成一套可复用的方法，核心不是单纯生成文案，而是试图把“什么内容更容易起量”这件事做成一套带套路库和分析框架的增长工具。'
         if cleaned and _looks_chinese(cleaned) and len(cleaned) >= 24:
             return _trim_text(cleaned, 180)
         return '这是一个近期升温的开源项目，重点要看它具体解决什么问题、采用什么方法，以及为什么会在社区里快速获得关注。'
@@ -750,6 +754,8 @@ def _metadata_summary_by_source(source_type: str, text: str) -> str:
             return '这条讨论围绕“vibe coding”正在逼近更正式的 agent 工程实践展开。核心担心不是 AI 会不会写代码，而是当大家用更随意的交互方式驱动复杂代理流程时，工程约束、可验证性和责任边界会不会被一起稀释。'
         if 'appearing productive in the workplace' in lower:
             return '这条讨论借“看起来很忙”这个职场现象，延伸到知识工作里产出、协作和可见度之间的错位：很多行为更像是在制造忙碌感，而不是直接创造结果。它之所以会被顶上来，是因为开发者和知识工作者对这种表演式生产力有很强共鸣。'
+        if 'steam controller cad files' in lower or 'valve releases steam controller cad files' in lower:
+            return '这条内容讲的是 Valve 把 Steam Controller 的 CAD 设计文件以 Creative Commons 许可公开出来，等于把这款老硬件的一部分结构资料正式开放给社区。它的意义不在一条普通公司新闻，而在于官方主动降低了玩家、维修者和二次创作者做复刻、改件和周边适配的门槛。'
         return '这条 Hacker News 热门内容围绕一个正在被开发者集中讨论的技术主题展开，重点应该落在它讨论了什么问题、给出了什么观点，以及为什么会引发持续争论。'
     if source_type == 'github_advisory':
         cleaned = _clean_candidate(base)
