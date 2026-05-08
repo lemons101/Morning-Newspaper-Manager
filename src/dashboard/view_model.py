@@ -159,6 +159,13 @@ def _to_display_item(item: Dict[str, Any], rank: int) -> Dict[str, Any]:
     summary_en = str(item.get("summary_en") or "").strip() or summary
     why_it_matters = str(item.get("why_it_matters") or "").strip()
     key_points = _dedupe_key_points(summary_zh, [str(point).strip() for point in key_points if str(point).strip()])
+    banned_display_markers = [
+        '值得关注', '更像一个近期升温的项目信号', '社区转发', '已引起关注', '如果后续还要继续保留', '最好补充 README',
+        '更像一个社区讨论入口', '为什么会被开发者集中讨论'
+    ]
+    key_points = [p for p in key_points if not any(marker in p for marker in banned_display_markers)]
+    if any(marker in why_it_matters for marker in banned_display_markers):
+        why_it_matters = ''
 
     original_rank = int(item.get("rank", rank) or rank)
     return {
@@ -206,10 +213,10 @@ def _build_lead_bullets(final_newspaper: Dict[str, Any], top10: List[Dict[str, A
                 break
         if not _looks_like_good_chinese_summary(summary):
             summary = str(item.get('card_summary') or item.get('editorial_summary_hint') or item.get('summary_zh') or '').strip()
-        if not _looks_like_good_chinese_summary(summary) and first_point:
+        if not _looks_like_good_chinese_summary(summary) and first_point and _looks_like_content_summary(first_point):
             summary = first_point
         if not _looks_like_good_chinese_summary(summary):
-            summary = str(item.get('why_it_matters') or '').strip() if _looks_like_good_chinese_summary(str(item.get('why_it_matters') or '').strip()) else ''
+            summary = ''
         if not _looks_like_good_chinese_summary(summary):
             summary = _trim_text(str(item.get('summary_en') or item.get('summary') or ''), 140)
         lead_text = summary or first_point
@@ -268,6 +275,8 @@ def _dedupe_key_points(summary: str, points: List[str]) -> List[str]:
         point_text = str(point).strip()
         if not point_text:
             continue
+        if not _looks_like_content_summary(point_text):
+            continue
         point_norm = _normalize_compare_text(point_text)
         if not point_norm:
             continue
@@ -301,6 +310,11 @@ def _looks_like_content_summary(text: str) -> bool:
         '适合作为补充阅读而不是主线内容',
         '帮助团队快速形成核查动作',
         '为什么会被开发者集中讨论',
+        '社区转发',
+        '已引起关注',
+        '如果后续还要继续保留',
+        '最好补充 README',
+        '更像一个近期升温的项目信号',
     ]
     return (not any(text.startswith(x) for x in bad_prefixes)) and (not any(x in text for x in bad_contains))
 

@@ -223,6 +223,11 @@ def _clean_body(text: str) -> str:
         'Toggle navigation',
         'Sign in',
         'Appearance settings',
+        'GitHub Advisory Database',
+        'Hacker News item score=',
+        'You are seeing this because the administrator of this website has set up Anubis',
+        'Linux Kernel Runtime Guard Free & Open Source for any platform',
+        'Free & Open Source for Unix',
     ]:
         text = text.replace(needle, ' ')
     text = re.sub(r'Source:\s*Web Fetch', ' ', text, flags=re.IGNORECASE)
@@ -233,8 +238,11 @@ def _clean_body(text: str) -> str:
     text = re.sub(r'Platform AI CODE CREATION[\s\S]*?Open Source COMMUNITY', ' ', text, flags=re.IGNORECASE)
     text = re.sub(r'GitHub Copilot Write better code with AI[\s\S]*?Premium Support', ' ', text, flags=re.IGNORECASE)
     text = re.sub(r'Hacker News\s+new\s+\|\s+past\s+\|\s+comments\s+\|\s+ask\s+\|\s+show\s+\|\s+jobs\s+\|\s+submit\s+login', ' ', text, flags=re.IGNORECASE)
+    text = re.sub(r'Hacker News item score=\d+, comments=\d+\s*\|\s*author=\w+', ' ', text, flags=re.IGNORECASE)
     text = re.sub(r'\b\d+\s+points\s+by\s+\w+\s+\d+\s+hours?\s+ago\b', ' ', text, flags=re.IGNORECASE)
     text = re.sub(r'\bhide\s+\|\s+past\s+\|\s+favorite\s+\|\s+\d+\s+comments\b', ' ', text, flags=re.IGNORECASE)
+    text = re.sub(r'GitHub Advisory Database[\s\S]*?Severity\s+(Low|Moderate|High|Critical)', ' ', text, flags=re.IGNORECASE)
+    text = re.sub(r'oss-security\s*-\s*', ' ', text, flags=re.IGNORECASE)
     text = re.sub(r'\b(stars|forks|issues|pull requests|watching)\b', ' ', text, flags=re.IGNORECASE)
     text = re.sub(r'https?://\S+', ' ', text)
     text = re.sub(r'\s+', ' ', text)
@@ -462,6 +470,7 @@ def _content_first_summary(title: str, seed: str, focus: str, body_quality: str,
     blocked = [
         '这条内容值得关注',
         '这条内容当前更像一个社区讨论入口',
+        '这条现在更像社区讨论入口',
         '这条内容之所以值得进晨报',
         '这类条目真正有用的地方',
         '它值得看的不只是',
@@ -482,11 +491,11 @@ def _weak_item_summary(item: Dict[str, Any]) -> str:
     title = str(item.get('title') or '').strip()
     source_type = str(item.get('source_type') or '').strip()
     if 'Craig Venter' in title:
-        return '这条内容更像是社区侧的泛科技关注点，目前能确认的文章信息有限，和 AI 主线关系也不算强。'
+        return '这条内容更偏泛科技新闻，目前能确认的信息有限，和今天晨报的 AI 工程主线关系也不算强。'
     if 'Cursor Camp' in title:
-        return '这条目前主要体现的是社区热度，正文依据偏弱；现阶段更接近一个讨论信号，还不足以展开成信息完整的主条。'
+        return '这条内容当前更像一个社区活动或热度信号，已知信息还不足以支撑更完整的内容摘要。'
     if source_type == 'hackernews_top':
-        return '这条现在更像社区讨论入口，当前能抓到的正文信息还不够完整，因此暂时只能给出较保守的内容概括。'
+        return '这条内容目前正文抓取不足，但已知它对应的是一个具体事件、文章或观点；后续如果补到更完整正文，再继续把主线和影响写实。'
     return '这条信息目前正文依据不足，现阶段只能先保留为简要概括；如果后续拿到更完整正文，再补充细节。'
 
 
@@ -564,12 +573,16 @@ def _generate_source_specific_summary(title: str, source_type: str, source_name:
             return '这篇文章的核心观点是：网站首先应该服务用户完成任务，而不是服务老板、设计师或市场团队表达个人偏好。它值得看的地方在于把很多常见改版失败重新归因到“内部视角压过用户视角”这个更根本的问题上。'
         if 'byomesh' in title_lower or 'lora mesh radio' in title_lower:
             return '这条内容讲的是一个名为 BYOMesh 的 LoRa mesh 无线电项目，主打把传统 LoRa 低带宽链路往更高吞吐方向推进，试图让远距离低功耗组网不只适合传感器消息，也能承载更丰富的数据传输。'
+        if 'dirtyfrag' in title_lower or 'dirty frag' in title_lower:
+            return '这条内容讲的是一个被称为 Dirtyfrag 的 Linux 本地提权问题，重点不只是提权漏洞本身，而是它可能影响共享主机、容器节点和多租户执行环境。相关讨论把焦点放在：这类底层内核问题一旦公开，很多下游环境往往需要在很短时间内重新评估暴露面和缓解动作。'
         if _looks_like_good_zh_summary(summary_zh):
             return summary_zh
         if _looks_like_good_zh_summary(hint):
             return hint
     if 'computer use is 45x more expensive than structured apis' in title_lower:
         return '这篇文章拿同一个后台管理任务做对照测试：一条路线让 AI 通过截图、点击和页面操作完成任务，另一条路线则直接调用结构化 API。结果是前者走了 53 步、消耗约 55.1 万 token，后者只用了 8 次调用和约 1.2 万 token，核心结论不是“视觉代理不能用”，而是如果系统具备可调用接口，直接走 API 在成本和稳定性上会明显更划算。'
+    if "maybe you shouldn't install new software for a bit" in title_lower:
+        return '这篇文章想表达的重点不是一条临时情绪化建议，而是当下软件供应链和依赖生态变得越来越复杂后，普通用户和开发者在安装新软件时面对的信任成本正在上升。它更像是在提醒大家：默认“先装再说”的习惯，已经不再像过去那样安全。'
     if 'write some software, give it away for free' in title_lower:
         return '这篇文章讨论的是一种反常见 SaaS 化逻辑的软件观：作者把自己开发的开源写作工具 Nonograph 免费开放，并明确反对为了订阅、广告和资本叙事去不断叠加收费与噱头功能。文章真正想表达的重点，是软件是否必须持续被包装成最大化变现的产品，以及创作者能否保留把工具当作品而不是当流水线生意来做的空间。'
     if 'de tld offline due to dnssec' in title_lower or 'dnssec' in title_lower:
@@ -595,6 +608,12 @@ def _generate_source_specific_summary(title: str, source_type: str, source_name:
             return '这条安全公告的核心不是普通缺陷，而是 CKAN 的未授权 SQL 注入与鉴权绕过风险。对使用 CKAN 或类似数据服务组件的团队来说，真正要紧的是尽快确认受影响版本、是否暴露私有资源，以及数据库访问边界是否需要紧急收紧。'
         if 'ps_checkout' in title_lower:
             return '这条安全公告指向 ps_checkout 存在未校验参数导致的未授权方法调用风险。虽然官方标注为低危，但它仍提示支付相关组件在输入校验和方法暴露边界上存在可被滥用的缺口。'
+        if 'dirtyfrag' in title_lower or 'dirty frag' in title_lower:
+            return '这条内容讲的是一个被称为 Dirtyfrag 的 Linux 本地提权问题，重点不只是存在提权漏洞，而是它可能影响较广的 Linux 环境，尤其共享主机、容器节点和多租户执行场景需要尽快评估暴露面。'
+        if 'rust-openssl' in title_lower and 'aes key-wra' in title_lower:
+            return '这条公告讲的是 rust-openssl 在使用 AES key-wrap-with-padding 加密时，输出缓冲区大小处理有误，攻击者如果能影响明文长度，可能把最多 7 个字节写到缓冲区外，进一步造成可控的堆内存破坏。'
+        if 'utcp-http' in title_lower and 'ssrf' in title_lower:
+            return '这条公告讲的是 utcp-http 在复用 OpenAPI 里声明的 `servers[0].url` 时没有重新做边界校验，攻击者可以借此把工具调用引向内部地址，进一步把 agent 变成盲 SSRF 跳板，去探测内网或打云元数据接口。'
         return _metadata_summary_by_source(source_type, hint or summary_zh or title)
     if source_type == 'github_high_stars':
         if 'mhr-cfw' in title_lower:
@@ -605,6 +624,8 @@ def _generate_source_specific_summary(title: str, source_type: str, source_name:
             return '这次公开披露的是一个影响面很广的 Linux 本地提权漏洞。它的危险之处不只是提权本身，而是利用门槛相对直接，且会波及共享主机、容器节点、CI runner 和多租户执行环境，因此对云上和多租户场景的实际风险更高。'
         if 'gpt-agreement-payment' in title_lower:
             return '这个项目围绕 ChatGPT Team 订阅协议与支付链路做了较激进的重放与自动化研究，附带 hCaptcha 视觉求解器和一组反欺诈机制观察数据。它值得关注的不是可直接复用性，而是暴露出订阅、风控与自动化对抗之间的攻防面已经被更系统地工程化。'
+        if 'tokenspeed' in title_lower:
+            return '这是一个做 LLM 推理加速的开源项目，核心卖点是把推理延迟和吞吐再往前推一截，让同样的模型部署在更接近“高并发、低等待”的状态下运行。它被关注的重点不在星数，而在底层推理引擎还能从调度、通信和执行路径里榨出多少性能。'
         if _looks_like_good_zh_summary(hint):
             return hint
     if _looks_like_good_zh_summary(summary_zh):
@@ -627,6 +648,9 @@ def _normalize_summary_main(card_summary: str, hint: str, summary_zh: str, body_
         '这条内容值得关注，因为它对应的是一个更具体的工程、产品或行业变化',
         '这是一条官方发布，主要内容是：',
         '这条内容对应的是一则需要尽快核查影响面的安全公告',
+        '这条 Hacker News 热门内容围绕一个正在被开发者集中讨论的技术主题展开',
+        '这条安全公告重点在于说明受影响组件、触发条件、可能结果以及短期修复或缓解方向',
+        '网页导航 · 完整目录 · English README',
     ]
     for candidate in zh_candidates:
         text = str(candidate or '').strip()
@@ -688,6 +712,7 @@ def _rewrite_summary_from_body(title: str, body: str, fallback: str = '') -> str
 def _metadata_summary_by_source(source_type: str, text: str) -> str:
     base = _trim_text(str(text or '').strip(), 180)
     lower = str(text or '').lower()
+    title_line = str(text or '').splitlines()[0].strip() if text else ''
     if base and len(base) > 60:
         for marker in [
             '这条 Hacker News 热门内容围绕一个正在被开发者集中讨论的技术主题展开',
@@ -741,15 +766,21 @@ def _metadata_summary_by_source(source_type: str, text: str) -> str:
         cleaned = _clean_candidate(base)
         if 'cheat-on-content' in lower:
             return '这个项目主打把短视频/内容分发里的选题、结构、钩子和传播规律拆成一套可复用的方法，核心不是单纯生成文案，而是试图把“什么内容更容易起量”这件事做成一套带套路库和分析框架的增长工具。'
-        if cleaned and _looks_chinese(cleaned) and len(cleaned) >= 24:
+        if 'yao-open-prompts' in lower:
+            return '这是一个面向中文工作与内容场景的提示词仓库，重点不是展示星数，而是把分散的提示词整理成可复用目录，方便用户按写作、营销、学习、产品和 GEO 等场景直接取用。'
+        if cleaned and _looks_chinese(cleaned) and len(cleaned) >= 24 and '网页导航' not in cleaned and 'English README' not in cleaned and '近期在 GitHub 上升温的开源项目' not in cleaned:
             return _trim_text(cleaned, 180)
+        if title_line:
+            return f'这个开源项目当前更值得关注的是：{title_line} 试图解决一个具体工作流问题，但还需要结合 README 主体进一步提炼它的方法和实际用途。'
         return '这是一个近期升温的开源项目，重点要看它具体解决什么问题、采用什么方法，以及为什么会在社区里快速获得关注。'
     if 'de tld offline due to dnssec' in lower or 'dnssec' in lower:
         return '这条内容围绕 .de 域名体系疑似因 DNSSEC 信任链或签名配置异常而出现可用性问题展开。虽然当前能抓到的更多是分析工具输出，但讨论焦点已经很明确：底层域名解析链一旦在 DNSSEC 这层出错，影响会直接放大成大范围访问异常。'
     if source_type == 'hackernews_top':
         cleaned = _clean_candidate(base)
-        if cleaned and _looks_chinese(cleaned) and len(cleaned) >= 24:
+        if cleaned and _looks_chinese(cleaned) and len(cleaned) >= 24 and 'Hacker News 热门内容围绕' not in cleaned:
             return _trim_text(cleaned, 180)
+        if 'canvas is down as shinyhunters threatens to leak schools’ data' in lower or 'canvas is down as shinyhunters threatens to leak schools\' data' in lower or ('canvas' in lower and 'shinyhunters' in lower and 'schools' in lower):
+            return '这条内容讲的是 Instructure 旗下教学平台 Canvas 在疑似勒索软件事件后发生服务中断，攻击者还威胁泄露学校数据。讨论重点不只是宕机本身，而是教育机构依赖的关键 SaaS 一旦出事，会同时牵动教学连续性和敏感数据风险。'
         if 'vibe coding and agentic engineering' in lower:
             return '这条讨论围绕“vibe coding”正在逼近更正式的 agent 工程实践展开。核心担心不是 AI 会不会写代码，而是当大家用更随意的交互方式驱动复杂代理流程时，工程约束、可验证性和责任边界会不会被一起稀释。'
         if 'appearing productive in the workplace' in lower:
@@ -758,18 +789,24 @@ def _metadata_summary_by_source(source_type: str, text: str) -> str:
             return '这条内容讲的是 Valve 把 Steam Controller 的 CAD 设计文件以 Creative Commons 许可公开出来，等于把这款老硬件的一部分结构资料正式开放给社区。它的意义不在一条普通公司新闻，而在于官方主动降低了玩家、维修者和二次创作者做复刻、改件和周边适配的门槛。'
         if 'google cloud fraud defense' in lower or 'next evolution of recaptcha' in lower:
             return '这条内容讲的是 Google Cloud 把反欺诈能力进一步产品化，作为 reCAPTCHA 之后的新一代风控方案来对外提供。重点不是再做一次验证码升级，而是把设备、行为、请求上下文等多维信号一起纳入判断，用来更早识别账号盗用、批量注册和支付欺诈这类自动化攻击。'
-        return '这条 Hacker News 热门内容围绕一个正在被开发者集中讨论的技术主题展开，重点应该落在它讨论了什么问题、给出了什么观点，以及为什么会引发持续争论。'
+        if title_line:
+            return f'这条 Hacker News 热门内容围绕 {title_line} 展开，当前至少能确认它对应的是一个具体事件或观点，而不是单纯的热度话题。'
+        return '这条 Hacker News 热门内容对应的是一个具体事件、项目或观点，当前需要继续补正文，但不应再用空泛讨论句充当主要内容。'
     if source_type == 'github_advisory':
         cleaned = _clean_candidate(base)
-        if cleaned and _looks_chinese(cleaned) and len(cleaned) >= 24:
+        if cleaned and _looks_chinese(cleaned) and len(cleaned) >= 24 and '这条安全公告重点在于说明受影响组件' not in cleaned:
             return _trim_text(cleaned, 180)
+        if 'netbox-data-flows' in lower and 'stored xss' in lower:
+            return '这条公告讲的是 netbox-data-flows 在 DataFlow 模板里渲染 ObjectAlias 名称时存在存储型 XSS，攻击者如果能写入恶意别名，后续查看相关页面的用户就可能执行到注入脚本。'
         if 'hono' in lower and 'bodylimit' in lower:
             return '这条公告讲的是 Hono 的 bodyLimit() 在分块传输或请求体长度未知的情况下可能被绕过，结果是原本依赖请求体大小限制的防护失效，应用可能因此接收超出预期的大请求。'
         if 'hono/jsx' in lower or 'html injection' in lower:
             return '这条公告指向 hono/jsx 对 JSX 标签名缺少有效校验，攻击者如果能控制相关输入，可能把恶意标签或属性混进输出 HTML，进一步带来注入风险。'
         if 'lemmy' in lower and 'verification' in lower:
             return '这条公告讲的是 Lemmy 的 resend-verification 接口会泄露邮箱是否已注册，问题的核心不是直接拿到账号控制权，而是攻击者可以借此枚举站内有效邮箱，为后续撞库、钓鱼或定向攻击准备目标列表。'
-        return '这条安全公告重点在于说明受影响组件、触发条件、可能结果以及短期修复或缓解方向，而不是停留在漏洞编号本身。'
+        if title_line:
+            return f'这条安全公告围绕 {title_line} 展开，当前至少能确认它涉及具体组件与可利用风险，后续需要继续补齐受影响版本和修复状态。'
+        return '这条安全公告已经能确认存在具体受影响组件与风险结果，但还需要补齐受影响版本、利用条件和修复状态。'
     if 'retirement plans for small businesses' in lower or 'pooled employer plans' in lower:
         return '这条 SEC 信息讲的是两大部门联合发布工作人员指引，回应联邦证券法在 pooled employer plans（PEPs）这类面向中小企业的退休计划中的适用问题。重点不在市场情绪，而在监管层如何界定这类退休计划产品的证券法适用边界，以及相关参与方后续应如何理解合规责任。'
     if 'semiannual reporting' in lower and 'public companies' in lower:
@@ -799,11 +836,11 @@ def _normalize_why_it_matters(existing: str, title: str, source_type: str, sourc
         return _trim_text(text, 180)
     lower = f'{title} {body}'.lower()
     if source_type == 'github_advisory' or 'cve-' in lower or 'ghsa-' in lower:
-        return '这类条目的价值在于帮助团队更早识别受影响版本、利用条件和短期缓解路径，避免把安全公告当成“知道名字就行”的背景噪音。'
+        return '这条安全公告更值得继续看的地方，在于确认受影响范围、触发路径和短期缓解动作是否会影响现有部署。'
     if summary_basis == 'metadata_only' and source_type == 'github_high_stars':
-        return '这类项目型条目即使正文有限，也值得从它解决的问题、社区关注原因和潜在使用场景来判断是否需要继续跟踪。'
+        return ''
     if summary_basis == 'metadata_only' and source_type == 'hackernews_top':
-        return '这类条目的价值主要在于它提出了什么问题、代表了哪类开发者关注点，而不是把页面里零碎文字直接当成完整结论。'
+        return ''
     if source_type == 'hackernews_top' and 'apple' in lower and 'claude.md' in lower:
         return '它提示了一个新的 AI 开发供应链风险：除了密钥和调试配置，面向 AI 编码工具的指令文件也可能被误打进正式发行包。'
     if 'website is not for you' in lower:
@@ -826,25 +863,15 @@ def _build_key_points(title: str, source_type: str, source_name: str, body: str,
                 return [
                     '它关注的不是生成能力本身，而是 AI 编码助手长期使用后的本地状态膨胀问题。',
                     '核心方法是先做 handoff，再归档旧会话、worktree 和日志，而不是直接删除。',
-                    '这类项目被关注，说明大家开始把“AI 工具怎么长期维护”当成独立问题来解决。',
                 ]
-            return [
-                '它当前更像一个近期升温的项目或工具信号，重点是看它到底在解决什么实际问题。',
-                '社区转发、加星和讨论热度说明它已经引起关注，但不代表方案本身已经被充分验证。',
-                '如果后续还要继续保留，最好补充 README 主体或更多外部介绍来提高摘要确定性。',
-            ]
+            return []
         if source_type == 'hackernews_top':
             if 'de tld offline due to dnssec' in lower or 'dnssec' in lower:
                 return [
-                    '讨论焦点在于 .de 域名体系疑似出现 DNSSEC 信任链或签名配置异常。',
-                    '这类问题的风险在于它会从单点配置错误迅速放大成整片域名空间的访问异常。',
-                    '它值得关注，不是因为工具页面本身，而是因为它暴露了底层解析体系的脆弱面。',
+                    '.de 域名体系疑似出现 DNSSEC 信任链或签名配置异常。',
+                    '这类问题会从单点配置错误迅速放大成整片域名空间的访问异常。',
                 ]
-            return [
-                '这条当前更像社区讨论入口，重点是看它为什么会被一批开发者同时拿出来讨论。',
-                '在正文依据不足时，不宜把页面碎片直接当成结论，更适合先把握核心争议点。',
-                '它的晨报价值主要来自讨论原因和关注焦点，而不只是标题本身。',
-            ]
+            return []
     if 'bluetooth midi' in lower or 'windows midi' in lower:
         points = [
             '作者把蓝牙 MIDI 在 Windows 上“配对成功但软件不可用”的问题拆成多层兼容缺口。',
@@ -879,6 +906,21 @@ def _build_key_points(title: str, source_type: str, source_name: str, body: str,
                 points.append(clean + '。')
             if len(points) >= 2:
                 break
+        if len(points) < 2 and body_quality in {'good', 'limited'}:
+            body_sentences = re.split(r'(?<=[。！？.!?])\s+|\n+', _clean_body(body))
+            for sentence in body_sentences:
+                clean = sentence.strip()
+                if len(clean) < 20:
+                    continue
+                if any(x in clean for x in ['You are seeing this because', 'Hacker News item score=', 'GitHub Advisory Database', 'Sign in', 'Navigation Menu', '值得关注', '社区讨论入口']):
+                    continue
+                if any(clean in p or p.replace('。','') in clean for p in points):
+                    continue
+                if not _looks_like_content_summary(clean):
+                    continue
+                points.append(_trim_text(clean, 120).rstrip('。') + '。')
+                if len(points) >= 2:
+                    break
     return points[:2]
 
 
@@ -905,21 +947,50 @@ def _looks_like_good_zh_summary(text: str) -> bool:
         'new | past | comments',
         'login',
         'skip to content',
+        '围绕一个正在被开发者集中讨论的技术主题展开',
+        '重点在于说明受影响组件',
+        '网页导航 · 完整目录 · english readme',
     ]
     lower = text.lower()
     if any(marker in lower for marker in bad_markers):
         return False
     if len(text) < 28:
         return False
-    return True
+    return _looks_like_content_summary(text)
 
 
 def _looks_chinese(text: str) -> bool:
     return bool(re.search(r'[\u4e00-\u9fff]', str(text or '')))
 
 
+def _looks_like_content_summary(text: str) -> bool:
+    s = str(text or '').strip()
+    if not s:
+        return False
+    blocked = [
+        '围绕一个正在被开发者集中讨论的技术主题展开',
+        '重点在于说明受影响组件',
+        '网页导航 · 完整目录 · English README',
+        '值得关注，因为它对应的是一个更具体的工程、产品或行业变化',
+        '适合进入日报的风险信号位',
+        '这类项目型条目即使正文有限',
+        '这类条目的价值主要在于',
+        '当前更像社区讨论入口',
+        '引发持续争论',
+    ]
+    if any(mark in s for mark in blocked):
+        return False
+    if s.startswith('这条内容值得关注') or s.startswith('这条安全公告重点在于') or s.startswith('这条 Hacker News 热门内容围绕'):
+        return False
+    return True
+
+
 def _hn_hint(title: str, body: str, fallback: str) -> str:
     lower = f'{title} {body}'.lower()
+    if 'dirtyfrag' in lower or 'dirty frag' in lower:
+        return '这条内容讲的是一个被称为 Dirtyfrag 的 Linux 本地提权问题，重点不只是提权漏洞本身，而是它可能影响共享主机、容器节点和多租户执行环境。相关讨论把焦点放在：这类底层内核问题一旦公开，很多下游环境往往需要在很短时间内重新评估暴露面和缓解动作。'
+    if 'cloudflare to cut about 20% workforce' in lower or 'cloudflare' in lower and 'workforce' in lower:
+        return '这条内容讲的是 Cloudflare 计划裁掉约两成员工。报道把重点放在公司继续收缩组织规模、重配资源和推进效率调整上，也说明基础设施公司在增长预期、投入方向和业务节奏上仍在持续做取舍。'
     if 'for linux kernel vulnerabilities' in lower or 'there is no heads-up to distributions' in lower:
         return '围绕 Copy Fail 的邮件讨论指出，Linux 内核漏洞如果没有主动同步到特定发行版沟通渠道，很多发行版往往只能在公开披露后再跟进修补。这条真正值得看的，不只是漏洞本身，而是上游修复、长期维护分支回补和发行版响应之间存在明显时间差。'
     if 'opus 4.7' in lower and 'identify' in lower:
@@ -974,7 +1045,7 @@ def _trim_text(text: str, max_chars: int) -> str:
 
 
 def _storytone_expand_summary(title: str, seed: str, focus: str, body_quality: str, body: str) -> str:
-    text = _trim_text(str(seed or '').strip(), 220)
+    text = _trim_text(str(seed or '').strip(), 260)
     if not text:
         return ''
     return text

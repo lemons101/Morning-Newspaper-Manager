@@ -183,15 +183,31 @@ def _build_llm_prompt(item: Dict[str, Any]) -> str:
     if not body and not fallback_summary:
         return ''
     return (
-        '你是晨报编辑。请基于下面提供的材料，写成适合网页晨报展示的中文内容总结。\n\n'
+        '你是中文科技晨报编辑。请基于下面提供的材料，写成适合网页晨报展示的中文内容总结。\n\n'
+        '核心目标：summary_main 必须像真正晨报编辑写的“主要内容”，先讲这条到底讲了什么，再讲影响；要自然、具体、有信息量，不要像系统说明、项目资料卡或网页残片。summary_main 默认写成 2~3 句，不要只给一句过薄的短概括。\n\n'
         '要求：\n'
         '1. 不要复述标题，不要照抄原文，不要输出网页导航、登录提示、评论区噪音。\n'
-        '2. summary_main 和 why_it_matters 必须用自然中文完整改写，不能直接复制英文句子；允许保留产品名、公司名、漏洞编号等专有名词。\n'
-        '3. key_points 也必须写成中文要点，禁止直接粘贴英文原句。\n'
-        '4. 输出要像真正晨报编辑写的摘要，简洁、自然、信息密度高。\n'
-        '5. 如果正文不足或可信度有限，要保守表述，不要脑补。\n'
-        '6. 重点说明“这条讲了什么”和“为什么值得看”。\n'
-        '7. 仅输出 JSON，不要输出解释、代码块或额外文字。\n\n'
+        '2. summary_main 必须先回答“这条到底讲了什么”，写成像晨报正文的人话摘要；先讲事件/产品/漏洞/观点本身，再讲影响。尽量覆盖主线、事实承接、变化落点这 2~3 层信息，而不是只给一句很薄的标签式概括。\n'
+        '3. why_it_matters 只能补充“为什么值得看”，不能重复 summary_main，也不能写成空泛套话。\n'
+        '4. 禁止输出这类空话或编辑腔：如“值得关注”“引发持续讨论”“围绕某个技术主题展开”“重点在于说明”“对应某种行业变化”“这是一条安全公告”“这是一个近期在 GitHub 上升温的开源项目”。\n'
+        '5. 禁止输出这类脏内容：网页导航、登录提示、反爬页提示、README 目录串、评论数、点赞数、作者名、GitHub Advisory Database 页面 chrome、邮件列表页头。\n'
+        '6. summary_main 和 why_it_matters 必须用自然中文完整改写，不能直接复制英文句子；允许保留产品名、公司名、漏洞编号等专有名词。\n'
+        '7. key_points 也必须写成中文要点，禁止直接粘贴英文原句。\n'
+        '8. 如果正文不足或可信度有限，要保守表述，但仍要尽量说清楚“已知主线是什么”；不要用空泛模板句顶上。即使信息有限，也优先补足主体、动作、对象、结果中的至少两项。\n'
+        '9. 按来源类型把握口径：\n'
+        '   - Hacker News/讨论帖：先写讨论对象、事件或核心观点本身，禁止写“引发持续讨论”当主摘要。\n'
+        '   - 安全公告：先写受影响对象、利用方式/触发条件、风险结果，禁止写“重点在于说明受影响组件”。\n'
+        '   - GitHub 项目：先写项目做什么、解决什么问题、为什么被关注，禁止写 stars/forks/语言资料卡。\n'
+        '10. 仅输出 JSON，不要输出解释、代码块或额外文字。\n\n'
+        '正面案例（合格风格）：\n'
+        '{"summary_main":"这条内容讲的是 Instructure 旗下教学平台 Canvas 在疑似勒索软件事件后发生服务中断，攻击者还威胁泄露学校数据。报道把焦点放在服务可用性与数据泄露风险同时抬升这件事上，因为学校对关键 SaaS 的依赖一旦出问题，影响往往会从课堂运行迅速扩散到敏感数据保护。","why_it_matters":"它提醒学校和企业，关键 SaaS 一旦出问题，影响往往不只停留在服务可用性，还会迅速扩大到数据安全和业务连续性。","key_points":["Canvas 发生服务中断。","攻击者威胁泄露学校数据。","风险同时涉及可用性和敏感数据。"]}\n'
+        '{"summary_main":"这条公告讲的是 utcp-http 在复用 OpenAPI 里声明的 servers[0].url 时没有重新做边界校验，攻击者可以借此把工具调用引向内部地址，进一步把 agent 变成盲 SSRF 跳板。问题的关键不只是一次错误请求，而是工具调用链把原本应该被拦住的内部地址重新暴露给了外部输入。","why_it_matters":"它暴露出 agent 工具调用链里的信任边界问题，影响不只是一条 HTTP 请求，而是整个工具执行面。","key_points":["OpenAPI 声明地址被直接复用。","攻击者可诱导工具请求内部地址。","风险可扩展到内网探测和云元数据访问。"]}\n'
+        '{"summary_main":"马斯克正推动 X 继续向支付和金融服务延伸，其中一项银行或支付工具已接近推出。彭博的报道说明，X 的目标已经不只是维持社交平台形态，而是继续往交易、支付和更完整的“超级应用”能力靠拢。","why_it_matters":"如果工具真正上线，X 的平台边界会进一步从内容分发走向金融服务。","key_points":["X 正推动支付/银行工具落地。","平台定位向超级应用延伸。","重点不再只是社交分发。"]}\n\n'
+        '反面案例（不合格，禁止模仿）：\n'
+        '{"summary_main":"这条 Hacker News 热门内容围绕一个正在被开发者集中讨论的技术主题展开。"}\n'
+        '{"summary_main":"这条安全公告重点在于说明受影响组件、触发条件、可能结果以及短期修复或缓解方向。"}\n'
+        '{"summary_main":"这是一个近期在 GitHub 上升温的开源项目，目前约 1200 星、190 forks，主要语言是 Python。"}\n'
+        '{"summary_main":"GitHub Advisory Database GitHub Reviewed ..."}\n\n'
         '输出 JSON 格式：\n'
         '{"summary_main":"...","why_it_matters":"...","key_points":["...","...","..."]}\n\n'
         f'标题: {title}\n'
@@ -241,6 +257,18 @@ def _parse_llm_summary_text(text: str) -> Dict[str, Any] | None:
         return None
     if why_it_matters and _looks_mostly_english(why_it_matters):
         why_it_matters = ''
+    blocked_summary_markers = [
+        '围绕一个正在被开发者集中讨论的技术主题展开',
+        '重点在于说明受影响组件',
+        '这是一个近期在 GitHub 上升温的开源项目',
+        'GitHub Advisory Database',
+        'You are seeing this because',
+        'Anubis',
+        'English README',
+        '完整目录',
+    ]
+    if any(marker in summary_main for marker in blocked_summary_markers):
+        return None
     key_points = [p for p in key_points if not _looks_mostly_english(p)]
     return {
         'summary_main': _trim(summary_main, 180),
@@ -262,7 +290,9 @@ def _clean_for_llm(text: str) -> str:
             'you signed in', 'you signed out', 'navigation menu', 'skip to content', 'cookie policy',
             'privacy policy', 'terms', 'marketplace', 'github copilot', 'search code, repositories',
             'use saved searches', 'include my email address', 'sign in to github', 'reload to refresh your session',
-            'all available qualifiers', 'we read every piece of feedback', 'share this article', 'advertisement'
+            'all available qualifiers', 'we read every piece of feedback', 'share this article', 'advertisement',
+            'github advisory database', 'hacker news item score=', 'author=priorityleft', 'anubis to protect the server',
+            'linux kernel runtime guard free & open source for any platform', 'free & open source for unix'
         ]):
             continue
         if _looks_noisy(s):
@@ -471,7 +501,14 @@ def _github_snapshot_summary(text: str) -> str:
     metric = '，'.join(parts)
     if metric:
         metric = f'，{metric}'
-    return f"这是一个近期在 GitHub 上升温的开源项目{metric}，核心方向是：{_trim(desc, 120)}"
+    desc = _trim(desc, 120)
+    if not desc:
+        return ''
+    if '提示词' in desc or 'prompt' in desc.lower():
+        return f"这个项目围绕提示词组织与复用展开，核心是把分散的提示词整理成可直接使用的场景化目录。它当前体现的不是单一模型能力，而是提示词资产开始被当成可复用的工作流素材来管理。"
+    if '推理' in desc or 'inference' in desc.lower() or 'latency' in desc.lower() or 'throughput' in desc.lower():
+        return f"这个项目主要在做模型推理加速，重点放在延迟、吞吐或执行效率优化上。它反映的是推理基础设施竞争正在从单点模型效果，进一步走向更底层的系统效率。"
+    return f"这个项目主要在做：{desc}。它反映的是相关能力正在从概念介绍走向更具体的产品化或工程化落地。"
 
 
 def _github_snapshot_points(text: str) -> List[str]:
