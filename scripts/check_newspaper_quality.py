@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any, Dict, List
@@ -24,7 +25,27 @@ BAD_CONTAINS = [
     '帮助团队快速形成核查动作',
     '为什么会被开发者集中讨论',
     '保守概括',
+    'GitHub Reviewed',
+    'Published May',
+    'Updated May',
+    'Dependabot alerts',
+    'Navigation Menu',
+    'Sign In Subscribe',
+    'Posts RSS',
+    'RSS Contact',
 ]
+
+
+def _too_much_english(text: str) -> bool:
+    words = re.findall(r'[A-Za-z]{4,}', str(text or ''))
+    return len(words) >= 8
+
+
+def _title_not_localized(title: str) -> bool:
+    title = str(title or '').strip()
+    zh_chars = len(re.findall(r'[\u4e00-\u9fff]', title))
+    ascii_words = re.findall(r'[A-Za-z]{3,}', title)
+    return zh_chars < 4 and len(ascii_words) >= 3
 
 
 def _read_json(path: Path) -> Dict[str, Any]:
@@ -47,6 +68,8 @@ def _bad_summary(text: str) -> str | None:
     for marker in BAD_CONTAINS:
         if marker in text:
             return f'bad_contains:{marker}'
+    if _too_much_english(text):
+        return 'too_much_english'
     return None
 
 
@@ -61,11 +84,13 @@ def main() -> int:
         problems.append(f'top10_count={len(items)} expected=10')
 
     for idx, item in enumerate(items, 1):
-        title = str(item.get('title') or item.get('card_title') or '').strip()
+        title = str(item.get('title_zh') or item.get('card_title') or item.get('title') or '').strip()
         summary = str(item.get('summary_main') or item.get('card_summary') or item.get('editorial_summary_hint') or '').strip()
         issue = _bad_summary(summary)
         if issue:
             problems.append(f'#{idx} {title}: {issue}')
+        if _title_not_localized(title):
+            problems.append(f'#{idx} {title}: title_not_localized')
 
     html_path = runtime / 'dashboard.html'
     if not html_path.exists():

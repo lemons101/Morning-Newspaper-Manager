@@ -534,6 +534,8 @@ def _normalize_title_zh(card_title: str, raw_title: str, source_type: str, sourc
         return 'Linux 内核漏洞披露流程暴露预警缺口'
     if source_type == 'hackernews_top' and ('copy fail' in raw_lower or 'cve-2026-31431' in raw_lower):
         return 'Linux 内核漏洞预警机制缺口暴露出来'
+    if source_type == 'hackernews_top' and 'ai is breaking two vulnerability cultures' in raw_lower:
+        return 'AI 正在改变漏洞披露与修复的旧节奏'
     if source_type == 'hackernews_top' and 'opus 4.7 knows the real kelsey' in raw_lower:
         return 'Opus 4.7 暴露出短文本作者识别能力'
     if source_type == 'hackernews_top' and 'room 641a' in raw_lower:
@@ -544,16 +546,38 @@ def _normalize_title_zh(card_title: str, raw_title: str, source_type: str, sourc
         return 'Contras 符号链接策略绕过漏洞需要尽快核查'
     if source_type == 'github_advisory' and 'kirby cms' in raw_lower:
         return 'Kirby CMS 权限校验缺口带来内容越权风险'
+    if source_type == 'github_advisory' and ('epa4all-client' in raw_lower or 'vau signature bypass' in raw_lower):
+        return 'epa4all-client 签名校验绕过漏洞需要尽快排查'
+    if source_type == 'github_advisory' and 'sharpcompress' in raw_lower:
+        return 'SharpCompress 目录穿越漏洞影响解压安全边界'
+    if source_type == 'github_advisory' and 'mistune' in raw_lower:
+        return 'Mistune 图像指令 XSS 风险需要关注'
     if (source_type == 'rss' or source_name.startswith('SEC')) and 'jason burt' in raw_lower:
         return 'SEC 执法部门高层人事变动落定'
+    if source_type == 'rss' and ('columbia bank mhc' in raw_lower or 'columbia financial' in raw_lower):
+        return '美联储批准 Columbia Bank MHC 与 Columbia Financial 相关申请'
     if 'copy-fail-cve-2026-31431' in raw_lower:
         return 'Copy Fail PoC 把 Linux 提权风险进一步做实'
     if 'mhr-cfw' in raw_lower:
         return 'MHR-CFW 展示了基于 GAS 与 Cloudflare Workers 的转发链路'
     if 'im-not-ai' in raw_lower:
         return 'im-not-ai 试图把韩文 AI 文本改得更像自然表达'
-    if raw_title:
-        return raw_title
+    if 'yao-open-prompts' in raw_lower:
+        return 'Yao Open Prompts 把提示词整理成可复用素材库'
+    if 'tokenspeed' in raw_lower:
+        return 'TokenSpeed 继续推动大模型推理加速'
+    if source_type == 'github_high_stars':
+        repo = raw_title.split()[0].strip() if raw_title else ''
+        if repo:
+            return f'{repo} 成为近期受关注的开源项目'
+    if source_type == 'github_advisory':
+        product = raw_title.split('|')[0].strip() if '|' in raw_title else raw_title.strip()
+        if product:
+            return f'{product} 安全风险需要尽快核查'
+    if source_type == 'hackernews_top' and raw_title:
+        cleaned = re.sub(r'\s*\([^)]*\)', '', raw_title).strip(' -–—')
+        if cleaned:
+            return f'社区热议：{cleaned}'
     return title or '今日值得关注的信号'
 
 
@@ -565,6 +589,14 @@ def _generate_source_specific_summary(title: str, source_type: str, source_name:
     if source_type == 'hackernews_top':
         if 'bluetooth midi' in title_lower or 'windows midi' in title_lower:
             return '这是一款面向 Windows 的开源小工具，目标是把蓝牙 BLE MIDI 键盘稳定接入 Windows MIDI Services，让 DAW 和 Web MIDI 应用像使用有线设备一样识别无线键盘。作者把配对成功但软件不可见、电脑回传音符无声以及接收通道不一致等问题拆成了可复现、可修复的工程方案。'
+        if 'ai is breaking two vulnerability cultures' in title_lower:
+            return '这篇文章讨论的是，AI 正在打破原本相对稳定的漏洞披露与修复节奏。过去安全社区还能依赖“小范围协同修复、暂不公开细节”的默契，但在更快的分析、扩散与复现能力面前，这套做法越来越难维持。'
+        if 'google broke recaptcha for de-googled android users' in title_lower:
+            return '这条讨论聚焦 Google 的 reCAPTCHA 机制对去 Google 化 Android 用户造成的新兼容性问题。它反映出的不只是一次服务异常，而是当平台能力越来越深地绑定自家生态后，非官方系统和替代实现会更容易被排除在正常使用路径之外。'
+        if 'tesla model y passes nhtsa' in title_lower:
+            return '这条内容讲的是特斯拉 Model Y 通过了美国国家公路交通安全管理局新的辅助驾驶测试。讨论重点不只是一次测试结果，而是监管机构正在尝试用更明确的测试框架来评价辅助驾驶能力，这会影响行业后续宣传口径和产品验证方式。'
+        if 'you gave me a u32. i gave you root.' in title_lower or 'io_uring zcrx freelist lpe' in title_lower:
+            return '这条内容讲的是一项围绕 Linux io_uring 机制的本地提权研究。它说明底层高性能 I/O 组件一旦在边界处理上出现缺口，就可能被转化为直接拿到更高权限的攻击路径，对多用户和多租户环境尤其敏感。'
         if 'claude.md' in title_lower and 'apple' in title_lower:
             return '这条讨论围绕 Apple Support app 的安装包里误带 Claude.md 文件展开。它暴露出的重点不是单一文件泄露，而是面向 AI 编码工具的提示词、流程说明和开发约束文件，正在变成新的发布审查对象。'
         if 'postscript interpreter in the browser' in title_lower or 'postscript' in title_lower:
@@ -604,6 +636,12 @@ def _generate_source_specific_summary(title: str, source_type: str, source_name:
             return '这条高危公告指向 Contrast CLI 生成策略中的 CopyFile 校验缺口。风险不只是普通文件覆盖，而是宿主机上具备特定连接能力的进程可能借此改写来宾系统关键文件，甚至进一步造成敏感数据泄露和 guest takeover。'
         if 'kirby cms' in title_lower:
             return '这条高危公告指向 Kirby CMS 在页面与文件列表权限校验上的不一致问题。风险不在公开访客，而在已登录用户可能借由权限检查缺口访问本不该看到的内容，因此重点是尽快核对角色权限配置与修复版本。'
+        if 'epa4all-client' in title_lower or 'vau signature bypass' in title_lower:
+            return '这条高危公告指向 epa4all-client 的签名校验逻辑缺口：组件在做完证书链和算法准备后，没有真正校验签名结果，导致结构上看似合法的签名也可能被错误信任。对使用该依赖的系统来说，重点是尽快确认受影响版本并升级到修复版本。'
+        if 'sharpcompress' in title_lower:
+            return '这条公告指向 SharpCompress 在解压目录项时存在目录穿越风险。问题的关键不是普通解压失败，而是恶意压缩包可能把目录或文件写到目标路径之外，在部分场景下进一步放大成更严重的文件写入问题。'
+        if 'mistune' in title_lower:
+            return '这条公告指向 Mistune 在处理 Figure 指令时，对部分属性没有正确转义，最终可能把原本应被转义的内容带进 HTML 属性里，引发跨站脚本风险。对使用该 Markdown 渲染链路的服务来说，需要尽快核查版本并评估富文本输入面。'
         if 'ckan' in title_lower:
             return '这条安全公告的核心不是普通缺陷，而是 CKAN 的未授权 SQL 注入与鉴权绕过风险。对使用 CKAN 或类似数据服务组件的团队来说，真正要紧的是尽快确认受影响版本、是否暴露私有资源，以及数据库访问边界是否需要紧急收紧。'
         if 'ps_checkout' in title_lower:
@@ -624,6 +662,8 @@ def _generate_source_specific_summary(title: str, source_type: str, source_name:
             return '这次公开披露的是一个影响面很广的 Linux 本地提权漏洞。它的危险之处不只是提权本身，而是利用门槛相对直接，且会波及共享主机、容器节点、CI runner 和多租户执行环境，因此对云上和多租户场景的实际风险更高。'
         if 'gpt-agreement-payment' in title_lower:
             return '这个项目围绕 ChatGPT Team 订阅协议与支付链路做了较激进的重放与自动化研究，附带 hCaptcha 视觉求解器和一组反欺诈机制观察数据。它值得关注的不是可直接复用性，而是暴露出订阅、风控与自动化对抗之间的攻防面已经被更系统地工程化。'
+        if 'yao-open-prompts' in title_lower:
+            return '这个项目围绕提示词组织与复用展开，核心是把分散的提示词整理成可直接使用的场景化目录。它说明提示词资产正在从零散文本走向可复用、可维护、可沉淀的工作流素材。'
         if 'tokenspeed' in title_lower:
             return '这是一个做 LLM 推理加速的开源项目，核心卖点是把推理延迟和吞吐再往前推一截，让同样的模型部署在更接近“高并发、低等待”的状态下运行。它被关注的重点不在星数，而在底层推理引擎还能从调度、通信和执行路径里榨出多少性能。'
         if _looks_like_good_zh_summary(hint):
@@ -943,16 +983,26 @@ def _looks_like_good_zh_summary(text: str) -> bool:
     bad_markers = [
         'hacker news',
         'github advisory database',
+        'github reviewed',
+        'published may',
+        'updated may',
+        'dependabot alerts',
         'show hn:',
         'new | past | comments',
         'login',
         'skip to content',
+        'navigation menu',
+        'sign in subscribe',
+        'posts rss',
+        'rss contact',
         '围绕一个正在被开发者集中讨论的技术主题展开',
         '重点在于说明受影响组件',
         '网页导航 · 完整目录 · english readme',
     ]
     lower = text.lower()
     if any(marker in lower for marker in bad_markers):
+        return False
+    if len(re.findall(r'[A-Za-z]{4,}', text)) >= 8:
         return False
     if len(text) < 28:
         return False
@@ -1008,6 +1058,8 @@ def _official_hint(title: str, body: str, fallback: str) -> str:
     lower = f'{title} {body}'.lower()
     if 'jason burt' in lower and 'enforcement' in lower:
         return 'SEC 这条公告讲的是执法部门高层 Jason Burt 即将离任，属于监管机构内部人事调整。它和 AI 技术主线关系不强，但对观察监管执行风格、执法资源分配和后续对外信号仍有一定参考价值。'
+    if 'columbia bank mhc' in lower or 'columbia financial' in lower:
+        return '这条美联储公告讲的是监管层批准 Columbia Bank MHC 与 Columbia Financial, Inc. 的相关申请。它本身不是 AI 技术动态，但属于金融监管与机构动作信号，适合作为宏观与行业背景信息来观察。'
     if len(body) >= 180:
         return _trim_text(body, 220)
     return _trim_text(fallback, 180)

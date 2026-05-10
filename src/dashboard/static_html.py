@@ -148,7 +148,6 @@ def _items(items: Iterable[Dict[str, Any]], *, empty_text: str) -> str:
             f"""<div class="item">
   <div class="head"><span>#{escape(str(item.get("rank", "-")))}</span><span class="badge {priority}">{priority}</span><span class="muted">{source}</span></div>
   <div class="title">{icon} {title}</div>
-  {f'<div class="title-en">英文原题: {title_en}</div>' if title_en and title_en != title else ''}
   <p class="summary"><span class="label">主要内容:</span>{summary}</p>
   {points_html}
   <div class="meta">

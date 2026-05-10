@@ -19,6 +19,29 @@ BAD_PREFIXES = [
     '当前可直接确认的正文信息还有限',
 ]
 
+BAD_CONTAINS = [
+    'GitHub Reviewed',
+    'Published May',
+    'Updated May',
+    'Dependabot alerts',
+    'Navigation Menu',
+    'Sign In Subscribe',
+    'Posts RSS',
+    'RSS Contact',
+]
+
+
+def _too_much_english(text: str) -> bool:
+    words = re.findall(r'[A-Za-z]{4,}', str(text or ''))
+    return len(words) >= 8
+
+
+def _title_not_localized(title: str) -> bool:
+    title = str(title or '').strip()
+    zh_chars = len(re.findall(r'[\u4e00-\u9fff]', title))
+    ascii_words = re.findall(r'[A-Za-z]{3,}', title)
+    return zh_chars < 4 and len(ascii_words) >= 3
+
 
 def _read_json(path: Path) -> Dict[str, Any]:
     if not path.exists():
@@ -43,10 +66,15 @@ def _bad_summary(text: str) -> str | None:
     for prefix in BAD_PREFIXES:
         if text.startswith(prefix):
             return f'bad_prefix:{prefix}'
+    for marker in BAD_CONTAINS:
+        if marker in text:
+            return f'bad_contains:{marker}'
     if 'hacker news 热门内容围绕一个正在被开发者集中讨论的技术主题展开' in text.lower():
         return 'generic_hn_fallback'
     if re.search(r'我用它一个月涨粉\s*100w', text, flags=re.I):
         return 'marketing_dump'
+    if _too_much_english(text):
+        return 'too_much_english'
     return None
 
 
@@ -73,11 +101,18 @@ def main() -> int:
             problems.append('stale_meeting_alert_visible_in_dashboard')
 
     for idx, item in enumerate(editorial, 1):
-        title = str(item.get('title') or item.get('title_zh') or '').strip()
+        title = str(item.get('title_zh') or item.get('card_title') or item.get('title') or '').strip()
         summary = str(item.get('summary_main') or item.get('card_summary') or '').strip()
         issue = _bad_summary(summary)
         if issue:
             problems.append(f'#{idx} {title}: {issue}')
+        if _title_not_localized(title):
+            problems.append(f'#{idx} {title}: title_not_localized')
+
+    if html_path.exists():
+        html = html_path.read_text(encoding='utf-8', errors='ignore')
+        if '英文原题:' in html:
+            problems.append('dashboard_shows_english_original_title')
 
     if problems:
         print('[FAIL] newspaper runtime audit failed')
