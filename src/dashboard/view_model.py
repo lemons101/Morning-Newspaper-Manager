@@ -123,7 +123,7 @@ def _to_display_item(item: Dict[str, Any], rank: int) -> Dict[str, Any]:
     channel = str(item.get("channel", "")).strip()
     priority = _priority(item)
 
-    # 优先使用新版 editorial 链产出的标题/摘要；旧 summary 字段仅作为降级兜底
+    # 页面层固定标题优先级：card_title > title_zh > title；不要在这里重新发明标题
     title_zh = str(item.get("card_title") or item.get("title_zh") or item.get("title") or "").strip() or _title_zh(title, summary, source_type, source_name, channel)
     title_en = str(item.get("title_en") or "").strip() or title
     summary_zh = str(item.get("summary_main") or item.get("card_summary") or item.get("editorial_summary_hint") or "").strip()
@@ -164,6 +164,7 @@ def _to_display_item(item: Dict[str, Any], rank: int) -> Dict[str, Any]:
         '更像一个社区讨论入口', '为什么会被开发者集中讨论'
     ]
     key_points = [p for p in key_points if not any(marker in p for marker in banned_display_markers)]
+    key_points = [p for p in key_points if _is_clean_display_point(p)]
     if any(marker in why_it_matters for marker in banned_display_markers):
         why_it_matters = ''
 
@@ -201,32 +202,14 @@ def _build_lead_bullets(final_newspaper: Dict[str, Any], top10: List[Dict[str, A
     cards: List[Dict[str, str]] = []
     for idx, item in enumerate(items[:3], 1):
         title = str(item.get('card_title') or item.get('title_zh') or item.get('title') or '').strip()
-        summary = str(item.get('summary_main') or '').strip()
-        key_points = item.get('key_points') or []
-        if not isinstance(key_points, list):
-            key_points = []
-        first_point = ''
-        for point in key_points:
-            point_text = str(point).strip()
-            if _looks_like_good_chinese_summary(point_text):
-                first_point = point_text
-                break
-        if not _looks_like_good_chinese_summary(summary):
-            summary = str(item.get('card_summary') or item.get('editorial_summary_hint') or item.get('summary_zh') or '').strip()
-        if not _looks_like_good_chinese_summary(summary) and first_point and _looks_like_content_summary(first_point):
-            summary = first_point
-        if not _looks_like_good_chinese_summary(summary):
-            summary = ''
-        if not _looks_like_good_chinese_summary(summary):
-            summary = _trim_text(str(item.get('summary_en') or item.get('summary') or ''), 140)
-        lead_text = summary or first_point
+        summary = _pick_clean_display_summary(item, lead_mode=True)
         if not title:
             continue
         cards.append({
             'key': f'lead-{idx}',
             'icon': _topic_icon(item),
             'title': title,
-            'summary': _trim_lead_summary(lead_text),
+            'summary': _trim_lead_summary(summary),
         })
     if cards:
         return cards
@@ -265,6 +248,22 @@ def _normalize_compare_text(text: str) -> str:
     clean = re.sub(r'\s+', '', str(text or ''))
     clean = re.sub(r'[“”"‘’'"'"'`·,，。；;：:（）()\-—_]', '', clean)
     return clean
+
+
+def _is_clean_display_point(text: str) -> bool:
+    point = str(text or '').strip()
+    if not point:
+        return False
+    dirty_markers = [
+        'GitHub Reviewed', 'Published May', 'Updated May', 'Hacker News item score=', 'points by ', 'author=',
+        'Navigation Menu', 'Sign in', 'Write better code with AI', 'Build and deploy intelligent apps',
+        'Manage and compare prompts', 'Instant dev environments', 'GitHub Advisory Database'
+    ]
+    if any(marker in point for marker in dirty_markers):
+        return False
+    if len(re.findall(r'[A-Za-z]{4,}', point)) > 16 and len(re.findall(r'[\u4e00-\u9fff]', point)) < 20:
+        return False
+    return True
 
 
 def _dedupe_key_points(summary: str, points: List[str]) -> List[str]:
@@ -328,6 +327,13 @@ def _looks_like_good_chinese_summary(text: str) -> bool:
         'Websmith Home',
         'Running Adobe',
         '| Hacker News',
+        'GitHub Reviewed',
+        'Published May',
+        'Updated May',
+        'Critical severity',
+        'POSTS Local AI Needs to be the Norm',
+        'This article',
+        'One of the current trends in modern software',
         '这条内容值得关注，因为它对应的是一个更具体的工程、产品或行业变化，而不只是表面上的热闹话题。',
         '该信息值得关注，可作为今日早报的背景材料。',
         '这条内容当前更像一个社区讨论入口，重点不是页面碎片本身，而是先把它到底在讲什么、为什么会被开发者集中讨论这两件事讲清楚。',
@@ -337,7 +343,46 @@ def _looks_like_good_chinese_summary(text: str) -> bool:
     if any(x in text for x in bad_signals):
         return False
     zh_chars = len(re.findall(r'[\u4e00-\u9fff]', text))
-    return zh_chars >= 20
+    ascii_words = len(re.findall(r'[A-Za-z]{4,}', text))
+    return zh_chars >= 20 and ascii_words <= 12
+
+
+def _pick_clean_display_summary(item: Dict[str, Any], lead_mode: bool = False) -> str:
+    summary_main = str(item.get('summary_main') or '').strip()
+    card_summary = str(item.get('card_summary') or '').strip()
+    editorial_hint = str(item.get('editorial_summary_hint') or '').strip()
+    summary_zh = str(item.get('summary_zh') or '').strip()
+    summary_en = str(item.get('summary_en') or item.get('summary') or '').strip()
+    key_points = item.get('key_points') or []
+    if not isinstance(key_points, list):
+        key_points = []
+
+    candidates: List[str] = []
+    for value in [summary_main, card_summary, editorial_hint, summary_zh]:
+        value = str(value).strip()
+        if value:
+            candidates.append(value)
+    for point in key_points:
+        point_text = str(point).strip()
+        if point_text:
+            candidates.append(point_text)
+
+    for candidate in candidates:
+        if _looks_like_good_chinese_summary(candidate) and _looks_like_content_summary(candidate):
+            return candidate
+
+    fallback = _summary_zh(
+        str(item.get('title') or ''),
+        summary_en,
+        str(item.get('source_type') or ''),
+        str(item.get('source_name') or ''),
+        str(item.get('channel') or ''),
+        item,
+    ).strip()
+    if _looks_like_content_summary(fallback):
+        return fallback if not lead_mode else _trim_text(fallback, 140)
+
+    return '这条内容的原始摘要质量不足，页面已暂时回退为更保守的中文概述。'
 
 
 def _hackernews_summary_zh(title: str, body_text: str) -> str:

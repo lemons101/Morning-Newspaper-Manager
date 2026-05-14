@@ -111,14 +111,23 @@ def _build_editorial_top10(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         title_zh = _normalize_title_zh(card_title, raw_title, source_type, source_name, title_zh_seed)
         generated_summary_zh = _generate_source_specific_summary(raw_title, source_type, source_name, body, summary_zh, editorial_summary_hint, body_quality)
         normalized_summary_zh = generated_summary_zh or summary_zh
+        if source_type in {'github_advisory', 'hackernews_top', 'tavily_skill', 'tavily_search'}:
+            clean_fallback = _safe_clean_summary_fallback(raw_title, source_type, source_name, body, summary_zh, editorial_summary_hint)
+            if clean_fallback:
+                normalized_summary_zh = clean_fallback
+        elif _should_force_clean_fallback(source_type, body_quality, summary_basis, normalized_summary_zh, editorial_summary_hint):
+            clean_fallback = _safe_clean_summary_fallback(raw_title, source_type, source_name, body, summary_zh, editorial_summary_hint)
+            normalized_summary_zh = clean_fallback or normalized_summary_zh
         summary_main = _normalize_summary_main(normalized_summary_zh or card_summary, editorial_summary_hint, normalized_summary_zh, body_quality, source_type=source_type, summary_basis=summary_basis, title=raw_title)
         why_main = _normalize_why_it_matters(str(item.get('why_it_matters') or '').strip(), raw_title, source_type, source_name, body, body_quality, summary_basis=summary_basis)
         key_points = _build_key_points(raw_title, source_type, source_name, body, summary_main, summary_basis=summary_basis, body_quality=body_quality)
 
         if summary_basis == 'full_text' and _looks_like_raw_page_dump(summary_main):
-            summary_main = _rewrite_summary_from_body(raw_title, body, fallback=editorial_summary_hint or summary_zh)
+            summary_main = _safe_clean_summary_fallback(raw_title, source_type, source_name, body, summary_zh, editorial_summary_hint)
         if summary_basis == 'partial_text' and (_looks_like_raw_page_dump(summary_main) or not _looks_chinese(summary_main)):
-            summary_main = _rewrite_summary_from_body(raw_title, body, fallback=editorial_summary_hint or summary_zh)
+            summary_main = _safe_clean_summary_fallback(raw_title, source_type, source_name, body, summary_zh, editorial_summary_hint)
+        if _should_force_clean_fallback(source_type, body_quality, summary_basis, summary_main, editorial_summary_hint):
+            summary_main = _safe_clean_summary_fallback(raw_title, source_type, source_name, body, summary_zh, editorial_summary_hint)
         editorial_items.append({
             'rank': idx,
             'item_id': item_id,
@@ -141,10 +150,10 @@ def _build_editorial_top10(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             'content_basis': summary_basis,
             'editorial_focus': editorial_focus,
             'editorial_angle': _editorial_angle(raw_title, source_type, source_name, body),
-            'editorial_summary_hint': summary_main,
+            'editorial_summary_hint': normalized_summary_zh or summary_main,
             'editorial_priority': _editorial_priority(idx, source_type, body_quality),
             'card_title': title_zh,
-            'card_summary': summary_main,
+            'card_summary': normalized_summary_zh or summary_main,
             'key_points': key_points,
         })
     return editorial_items
@@ -269,6 +278,54 @@ def _looks_noisy(text: str) -> bool:
     ]
     hit_count = sum(1 for x in noisy_hits if x in lower)
     return hit_count >= 4
+
+
+def _should_force_clean_fallback(source_type: str, body_quality: str, summary_basis: str, candidate: str, editorial_hint: str) -> bool:
+    text = str(candidate or '').strip()
+    hint = str(editorial_hint or '').strip()
+    if not text:
+        return True
+    dirty_markers = [
+        'GitHub Reviewed', 'Published May', 'Updated May', 'Hacker News item score=', 'points by ', 'author=',
+        'Write better code with AI', 'Build and deploy intelligent apps', 'Manage and compare prompts',
+        'Instant dev environments', 'GitHub Advisory Database', 'Sign in', 'Navigation Menu'
+    ]
+    if any(marker in text for marker in dirty_markers):
+        return True
+    if source_type in {'github_advisory', 'hackernews_top'} and body_quality in {'thin', 'limited', 'noisy'}:
+        return True
+    if summary_basis in {'metadata_only', 'partial_text'} and len(re.findall(r'[A-Za-z]{4,}', text)) > 18 and len(re.findall(r'[\u4e00-\u9fff]', text)) < 20:
+        return True
+    if hint and any(marker in hint for marker in dirty_markers):
+        return True
+    return False
+
+
+def _safe_clean_summary_fallback(title: str, source_type: str, source_name: str, body: str, summary_zh: str, editorial_hint: str) -> str:
+    facts = _extract_fact_sentences(body)
+    fact_summary = _compose_summary_from_facts(title, source_type, facts, fallback=summary_zh or editorial_hint)
+    if fact_summary and _is_publishable_chinese_summary(fact_summary):
+        return _trim_text(fact_summary, 220)
+    for candidate in [editorial_hint, summary_zh]:
+        value = str(candidate or '').strip()
+        if value and not _looks_like_raw_page_dump(value) and _looks_chinese(value) and _is_publishable_chinese_summary(value):
+            return _trim_text(value, 220)
+    hint = _editorial_summary_hint(title, source_type, source_name, body, summary_zh)
+    if not _is_publishable_chinese_summary(hint):
+        generated = _generate_source_specific_summary(title, source_type, source_name, body, summary_zh, editorial_hint, 'limited')
+        if _is_publishable_chinese_summary(generated):
+            return _trim_text(generated, 220)
+    hint = str(hint or '').strip()
+    if hint and not _looks_like_raw_page_dump(hint):
+        return _trim_text(hint, 220)
+    rewritten = _rewrite_summary_from_body(title, body, fallback=summary_zh or editorial_hint)
+    rewritten = str(rewritten or '').strip()
+    if rewritten and _is_publishable_chinese_summary(rewritten):
+        return _trim_text(rewritten, 220)
+    generated = _generate_source_specific_summary(title, source_type, source_name, body, summary_zh, editorial_hint, 'thin')
+    if _is_publishable_chinese_summary(generated):
+        return _trim_text(generated, 220)
+    return _trim_text(summary_zh or editorial_hint or title, 220)
 
 
 def _editorial_focus(title: str, source_type: str, source_name: str, body: str) -> str:
@@ -529,6 +586,9 @@ def _normalize_title_zh(card_title: str, raw_title: str, source_type: str, sourc
     seed = str(title_zh_seed or '').strip()
     if _looks_chinese(seed):
         return seed
+    generic = _generic_title_zh(raw_title, source_type, source_name)
+    if generic:
+        return generic
     raw_lower = raw_title.lower()
     if source_type == 'hackernews_top' and ('for linux kernel vulnerabilities' in raw_lower or 'there is no heads-up to distributions' in raw_lower):
         return 'Linux 内核漏洞披露流程暴露预警缺口'
@@ -620,12 +680,26 @@ def _generate_source_specific_summary(title: str, source_type: str, source_name:
     if 'de tld offline due to dnssec' in title_lower or 'dnssec' in title_lower:
         return '这条内容围绕 .de 域名体系疑似因 DNSSEC 信任链或签名配置异常而出现可用性问题展开。虽然当前抓到的正文主要是分析工具输出，但已经能看出讨论焦点在于：一旦顶级域或权威解析链路上的 DNSSEC 配置出错，影响不会停留在单个站点，而可能直接放大到整片域名空间的访问稳定性。'
     if 'copilot coding agent' in title_lower:
-        return '这条内容围绕 GitHub Copilot 的 coding agent 能力展开，讨论焦点已经从自动补全延伸到让代理参与完整开发流程后，团队该如何设置测试边界、代码审查和人工接管机制。'
+        return '这条内容围绕 GitHub Copilot 的编程代理能力展开，讨论重点已经从自动补全延伸到让代理参与完整开发流程之后，团队该如何设置测试边界、代码审查与人工接管机制。它反映出开发者现在更关心的不是代理会不会写代码，而是它进入生产工作流后怎样被约束和协作。'
     if 'cloud demand shifts toward ai' in title_lower:
         return '这条内容讲的是企业上云需求正在更多转向 AI 负载，云厂商未来的竞争重点也会越来越多落在推理算力、专用芯片和基础设施供给能力上。'
+    if 'postmortem: tanstack npm supply-chain compromise' in title_lower:
+        return 'TanStack 已发布这次 NPM 供应链入侵的复盘，重点不只是“出了事故”，而是攻击者如何借发布链路、CI 环境和包分发窗口，在很短时间内投放恶意版本。对开发团队来说，这份复盘真正有价值的地方在于，它把一次开源生态供应链攻击的触发路径和补救动作讲得更清楚了。'
+    if 'if ai writes your code' in title_lower and 'python' in title_lower:
+        return '关于“如果 AI 负责写代码，为何还要用 Python”的讨论升温，背后其实是在追问：当 AI 改变开发流程后，语言选择标准会不会从“人写得顺手”转向“更适合机器生成、调试与维护”。这条话题之所以有传播度，不在于答案本身，而在于它击中了 AI 编程时代的语言位置变化。'
+    if 'opencode' in title_lower:
+        return '这条内容讨论的是一个开源 AI 编程代理，核心不只是“又一个 agent”，而是它想把代码生成、工具调用和开发流程编排做成一个更可控、可替换的开源方案。'
+    if 'claude platform on aws' in title_lower:
+        return '这条内容围绕 Claude 平台与 AWS 的结合展开，关注点不只是“上了哪个云”，而是模型平台、推理资源和企业交付能力正在更深地捆绑在一起。对企业客户来说，这类合作意味着模型能力越来越像云服务的一部分，而不是单独采购的 AI 工具。'
+    if 'they live' in title_lower and 'adblocker' in title_lower:
+        return '这条内容讨论的是一个带有恶搞意味的广告拦截器改造：它不再简单隐藏页面广告，而是把被拦截的位置替换成受电影《They Live》启发的标语块。它不是硬核 AI 基础设施条目，但代表了一类围绕浏览器体验、视觉表达和开源玩具项目的社区创意。'
     if 'permit optional semiannual reporting by public companies' in title_lower or ('semiannual reporting' in title_lower and 'public companies' in title_lower):
         return '这条 SEC 新闻稿讲的是一项拟议规则修改：允许上市公司用半年报替代现行的季度中期报告义务。核心变化不在某家公司本身，而在信息披露节奏可能被拉长，这会直接影响上市公司合规成本、投资者获取经营更新的频率，以及美国证券披露制度的运作方式。'
     if source_type == 'github_advisory':
+        if 'tanstack' in title_lower and ('malware' in title_lower or 'exfiltrates' in title_lower):
+            return '这条高危公告指向 TanStack 相关 NPM 包遭到供应链投毒，恶意版本会外传云凭证、GitHub token 和 SSH 密钥。对依赖这些包的团队来说，重点不只是升级到修复版本，而是尽快确认安装范围，并轮换可能已经暴露的敏感凭据。'
+        if 'gryph' in title_lower and 'payload filter' in title_lower:
+            return '这条公告指向 Gryph Agents 的敏感内容过滤与日志级别约束不一致：默认日志级别下，代理处理过的敏感文件内容仍可能以预览字段形式落进本地 sqlite。它的风险不在远程入侵，而在团队原本以为不会被记录的敏感内容，实际可能已经被保存在本地日志里。'
         if 'avideo' in title_lower:
             return '这条公告讲得很具体：AVideo 会把 `objects/plugins.json.php` 公开暴露出来，未登录用户可以从中读到 APISecret，然后再拿这个密钥去调用原本受保护的 API 接口，比如用户列表。问题的本质不是“有个配置泄露”这么简单，而是一个公开配置入口直接串起了后续未授权访问链。'
         if 'vllm' in title_lower:
@@ -677,12 +751,24 @@ def _generate_source_specific_summary(title: str, source_type: str, source_name:
     if source_type in {'tavily_skill', 'tavily_search'} and not _looks_chinese(body_clean):
         return _metadata_summary_by_source(source_type, summary_zh or hint or title)
     if body_quality in {'good', 'limited'} and _looks_chinese(body_clean):
+        facts = _extract_fact_sentences(body_clean)
+        fact_summary = _compose_summary_from_facts(title, source_type, facts, fallback=summary_zh or hint)
+        if fact_summary and _is_publishable_chinese_summary(fact_summary):
+            return _trim_text(fact_summary, 220)
         return _trim_text(body_clean, 220)
     return _metadata_summary_by_source(source_type, summary_zh or hint or title)
 
 
 def _normalize_summary_main(card_summary: str, hint: str, summary_zh: str, body_quality: str, *, source_type: str = '', summary_basis: str = '', title: str = '') -> str:
     zh_candidates = [summary_zh, card_summary, hint]
+    if summary_basis in {'metadata_only', 'partial_text'}:
+        publishable_candidates = [
+            str(x or '').strip() for x in zh_candidates
+            if str(x or '').strip() and _is_publishable_chinese_summary(str(x or '').strip())
+        ]
+        if publishable_candidates:
+            return _trim_text(publishable_candidates[0], 220)
+        return _evidence_insufficient_summary(source_type)
     weak_markers = [
         '这条内容当前更像一个社区讨论入口',
         '这条内容值得关注，因为它对应的是一个更具体的工程、产品或行业变化',
@@ -704,24 +790,85 @@ def _normalize_summary_main(card_summary: str, hint: str, summary_zh: str, body_
             return _trim_text(targeted, 220)
 
     if summary_basis == 'metadata_only':
-        return _metadata_summary_by_source(source_type, summary_zh or card_summary or hint)
+        return _evidence_insufficient_summary(source_type)
     if summary_basis == 'partial_text':
         best = str(summary_zh or card_summary or hint or '').strip()
-        if best and not _looks_like_raw_page_dump(best) and not any(m in best for m in weak_markers):
+        if best and _is_publishable_chinese_summary(best) and not any(m in best for m in weak_markers):
             return _trim_text(best, 220)
-        if targeted and _looks_chinese(targeted):
-            return _trim_text(targeted, 220)
-        if _looks_chinese(title):
-            return _trim_text(title, 220)
-        return '从目前抓到的内容看，这条主要在讲一个仍有待补充细节的技术或产品主题，现阶段可以先把握主线，再等待更完整正文补齐背景。'
+        return _evidence_insufficient_summary(source_type)
     for candidate in zh_candidates:
         text = str(candidate or '').strip()
         if text and _looks_chinese(text) and not _is_weak_summary(text) and not any(m in text for m in weak_markers):
             return _trim_text(text, 220)
     if body_quality in {'missing', 'thin'}:
-        return _trim_text(targeted or '这条内容目前正文依据偏弱，现阶段还需要更完整的正文或更多来源补充，但已经能看出它对应的是一个值得继续跟进的具体主题。', 220)
+        return _evidence_insufficient_summary(source_type)
     fallback = str(summary_zh or card_summary or hint or '').strip()
     return _trim_text(targeted or fallback, 220)
+
+
+def _is_publishable_chinese_summary(text: str) -> bool:
+    s = str(text or '').strip()
+    if not s:
+        return False
+    blocked = [
+        'GitHub Reviewed', 'Published May', 'Updated May', 'Hacker News item score=', 'points by ', 'author=',
+        'severity=', '## Summary', 'Write better code with AI', 'Open source AI coding agent | Hacker News'
+    ]
+    if any(mark in s for mark in blocked):
+        return False
+    if len(re.findall(r'[\u4e00-\u9fff]', s)) < 20:
+        return False
+    if len(re.findall(r'[A-Za-z]{4,}', s)) > 14:
+        return False
+    return True
+
+
+def _extract_fact_sentences(body: str, limit: int = 5) -> List[str]:
+    clean = _clean_body(body)
+    if not clean:
+        return []
+    raw_sentences = re.split(r'(?<=[。！？.!?])\s+|\n+', clean)
+    kept: List[str] = []
+    seen: set[str] = set()
+    blocked = [
+        'Sign in', 'Navigation Menu', 'Get notified', 'Please enter your name and email again', 'Hacker News',
+        'GitHub Reviewed', 'Published May', 'Updated May', 'points by ', 'author=', 'Skip', 'Submit'
+    ]
+    for sentence in raw_sentences:
+        s = ' '.join(sentence.split()).strip()
+        if len(s) < 40:
+            continue
+        if any(mark in s for mark in blocked):
+            continue
+        if re.fullmatch(r'[A-Za-z0-9\s\-_|:;,./()]+', s or ''):
+            continue
+        key = s[:120]
+        if key in seen:
+            continue
+        seen.add(key)
+        kept.append(s)
+        if len(kept) >= limit:
+            break
+    return kept
+
+
+def _compose_summary_from_facts(title: str, source_type: str, facts: List[str], fallback: str = '') -> str:
+    if not facts:
+        return ''
+    title_lower = str(title or '').lower()
+    first = facts[0]
+    second = facts[1] if len(facts) > 1 else ''
+    if source_type == 'github_advisory' or 'cve-' in title_lower or 'ghsa-' in title_lower:
+        return _trim_text(f'{first} {second}'.strip(), 220)
+    if 'opencode' in title_lower:
+        return '这条讨论的核心不是 OpenCode 火不火，而是开源 AI 编程代理在快速迭代时，默认权限、安全边界和工程治理是否跟得上。' if second else _trim_text(first, 220)
+    if 'copilot coding agent' in title_lower:
+        return '这条内容真正讨论的不是 Copilot 会不会写代码，而是当编程代理进入正式开发流程后，测试边界、代码审查和人工接管该如何重新定义。' if second else _trim_text(first, 220)
+    if 'cloud demand shifts toward ai' in title_lower:
+        return '这条内容的主线不是普通云增长，而是企业 AI 负载正在改变云资源需求结构，推理算力与基础设施供给开始成为更核心的竞争点。'
+    if second:
+        return _trim_text(f'{first} {second}', 220)
+    return _trim_text(first, 220)
 
 
 def _rewrite_summary_from_body(title: str, body: str, fallback: str = '') -> str:
@@ -747,6 +894,16 @@ def _rewrite_summary_from_body(title: str, body: str, fallback: str = '') -> str
     if not _looks_chinese(clean) and fallback:
         return _trim_text(fallback, 180)
     return clean or _trim_text(fallback or title, 180)
+
+
+def _evidence_insufficient_summary(source_type: str) -> str:
+    if source_type == 'github_advisory':
+        return '当前只确认到这是一条具体安全公告，但正文仍以公告模板和元数据为主，证据不足以生成可发布的“主要内容”，应先补充受影响范围与实际风险链。'
+    if source_type == 'hackernews_top':
+        return '当前只确认到这是一个正在被讨论的具体话题，但正文依据不足，还不能把热度或页面残片直接写成“主要内容”。'
+    if source_type in {'tavily_skill', 'tavily_search'}:
+        return '当前只拿到了外部搜索结果和讨论页片段，证据不足以稳定概括主要内容，应该先补正文或降级处理。'
+    return '当前正文证据不足，不能把标题、热度或页面残片直接写成主要内容。'
 
 
 def _metadata_summary_by_source(source_type: str, text: str) -> str:
@@ -852,11 +1009,13 @@ def _metadata_summary_by_source(source_type: str, text: str) -> str:
     if 'semiannual reporting' in lower and 'public companies' in lower:
         return '这条 SEC 新闻稿讲的是拟议放宽上市公司中期披露节奏：允许企业选择提交半年报，而不是继续按季度提交中期报告。它影响的重点是上市公司信息披露频率、合规负担和投资者获取公司阶段性经营信息的节奏。'
     if source_type in {'tavily_skill', 'tavily_search'}:
-        return '这条内容来自外部搜索结果，重点应该先落在它实际讲的产品、行业变化或技术主题上，而不是停留在空泛判断。'
+        return _evidence_insufficient_summary(source_type)
     if 'sec charges 21 individuals' in lower or 'insider trading scheme' in lower:
         return '这条 SEC 公告讲的是监管部门起诉 21 名涉案个人，指控其参与一场范围较广的内幕交易计划。重点不在单一案件细节，而在执法部门如何围绕信息泄露、交易协同和非法获利链条进行整体打击。'
     cleaned = _clean_candidate(base)
-    return cleaned or '这条内容目前能确认的是一个相对具体的技术、产品或监管主题，虽然细节还不完整，但主线已经足够明确。'
+    if cleaned and _is_publishable_chinese_summary(cleaned):
+        return cleaned
+    return _evidence_insufficient_summary(source_type)
 
 
 def _looks_like_raw_page_dump(text: str) -> bool:
@@ -897,6 +1056,10 @@ def _normalize_why_it_matters(existing: str, title: str, source_type: str, sourc
 def _build_key_points(title: str, source_type: str, source_name: str, body: str, summary_main: str, *, summary_basis: str = '', body_quality: str = '') -> List[str]:
     points: List[str] = []
     lower = f'{title} {body}'.lower()
+    if summary_basis in {'metadata_only', 'partial_text'}:
+        return []
+    if not _is_publishable_chinese_summary(summary_main):
+        return []
     if summary_basis == 'metadata_only':
         if source_type == 'github_high_stars':
             if 'keep-codex-fast' in lower:
@@ -972,6 +1135,10 @@ def _is_weak_summary(text: str) -> bool:
         '释放了商业化、产品发布或企业采用信号',
         '适合进入晨报主榜',
         '更适合作为补充信号观察',
+        '值得关注，因为它对应的是一个更具体的工程、产品或行业变化',
+        '当前正文证据不足',
+        '证据不足以生成可发布的“主要内容”',
+        '还不能把热度或页面残片直接写成“主要内容”',
     ]
     return any(phrase in lower for phrase in weak_phrases)
 
@@ -1027,6 +1194,9 @@ def _looks_like_content_summary(text: str) -> bool:
         '这类条目的价值主要在于',
         '当前更像社区讨论入口',
         '引发持续争论',
+        '当前正文证据不足',
+        '证据不足以生成可发布的“主要内容”',
+        '还不能把热度或页面残片直接写成“主要内容”',
     ]
     if any(mark in s for mark in blocked):
         return False
@@ -1065,8 +1235,61 @@ def _official_hint(title: str, body: str, fallback: str) -> str:
     return _trim_text(fallback, 180)
 
 
+def _generic_title_zh(raw_title: str, source_type: str, source_name: str) -> str:
+    raw = str(raw_title or '').strip()
+    lower = raw.lower()
+    if not raw:
+        return ''
+    if source_type == 'github_advisory':
+        if 'tanstack' in lower and ('malware' in lower or 'exfiltrates' in lower):
+            return 'TanStack 相关包曝出供应链投毒风险'
+        if 'mantisbt' in lower and 'file download' in lower:
+            return 'MantisBT 文件下载链路曝出存储型 XSS 风险'
+        if 'mantisbt' in lower and 'move attachments' in lower:
+            return 'MantisBT 附件移动页面曝出存储型 XSS 风险'
+        if 'gryph' in lower:
+            return 'Gryph Agents 敏感载荷过滤缺口需要尽快核查'
+        if 'hono' in lower and 'jwt' in lower:
+            return 'Hono JWT 校验边界问题需要尽快核查'
+        if 'hono' in lower and 'css' in lower:
+            return 'Hono JSX SSR 样式注入风险需要尽快核查'
+        prefix = raw.split('|')[0].strip() if '|' in raw else raw
+        return f'{prefix} 安全风险需要尽快核查'
+    if source_type == 'hackernews_top':
+        cleaned = re.sub(r'\s*\([^)]*\)', '', raw).strip(' -–—')
+        if 'tanstack' in lower and 'postmortem' in lower:
+            return 'TanStack 发布 NPM 供应链入侵复盘'
+        if 'if ai writes your code' in lower and 'python' in lower:
+            return 'AI 写代码时代，为什么开发者还在讨论 Python 的位置'
+        if 'claude platform on aws' in lower:
+            return 'Claude 平台落到 AWS，模型平台与云基础设施继续绑定'
+        if 'they live' in lower and 'adblocker' in lower:
+            return '把广告位改造成电影标语，这个拦截器项目为什么走红'
+        if 'google says criminal hackers used ai' in lower:
+            return 'Google 称黑客已开始用 AI 辅助挖掘重大软件漏洞'
+        if cleaned:
+            return f'社区热议：{cleaned}'
+    if source_type in {'tavily_skill', 'tavily_search'}:
+        if 'opencode' in lower:
+            return '开源 AI 编程代理 OpenCode 继续升温'
+        if 'copilot coding agent' in lower:
+            return 'GitHub Copilot 编程代理把开发流程边界问题推到台前'
+        if 'cloud demand shifts toward ai' in lower:
+            return '企业 AI 落地推高云需求，云工作负载结构开始变化'
+        if 'aws revenue jumps 28%' in lower or 'strong ai demand' in lower:
+            return 'AWS 云收入超预期，企业 AI 投入开始反映到财务指标'
+    if source_type == 'rss' and ('columbia bank mhc' in lower or 'columbia financial' in lower):
+        return '美联储批准 Columbia Bank MHC 与 Columbia Financial 相关申请'
+    return ''
+
+
 def _story_title(item: Dict[str, Any]) -> str:
     title = str(item.get('title') or '').strip()
+    source_type = str(item.get('source_type') or '').strip()
+    source_name = str(item.get('source_name') or '').strip()
+    generic = _generic_title_zh(title, source_type, source_name)
+    if generic:
+        return generic
     if 'future-agi' in title.lower():
         return 'FutureAGI 押注 Agent 闭环平台'
     if 'harmonist' in title.lower():
