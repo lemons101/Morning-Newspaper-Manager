@@ -1,6 +1,6 @@
 ---
 name: information-collector-skill
-description: 当 OpenClaw 需要采集信息、完成 Urgent/Important/FYI 分诊、生成 Top10 早报数据，并返回可点击的本地看板链接时使用。
+description: 当 OpenClaw 需要采集信息、完成 Urgent/Important/FYI 分诊、生成 LLM 候选池与 Top10 早报数据，并返回可点击的本地看板链接时使用。
 ---
 
 # 信息采集与早报看板 Skill
@@ -14,8 +14,10 @@ description: 当 OpenClaw 需要采集信息、完成 Urgent/Important/FYI 分�
    - `runtime/collected_items.json`
    - `runtime/triage_items.json`
    - `runtime/triage_candidates.json`
-   - `runtime/top10_items.json`
-   - `runtime/ai_selected_top10.json`，如果 OpenClaw 已完成精选
+   - `runtime/triage_candidates_enriched.json`
+   - `runtime/top10_items.json`，规则兜底版
+   - `runtime/ai_selected_top10.json`，LLM 主编终选结果
+   - `runtime/top10_editorial_ready.json`，页面展示前的编辑中间层
    - `runtime/mail_alerts.json`
    - `runtime/mail_event_queue.json`
    - `runtime/tavily_search_plan.json`
@@ -27,19 +29,24 @@ description: 当 OpenClaw 需要采集信息、完成 Urgent/Important/FYI 分�
 
 本 Skill 不直接调用 Tavily API。需要 Tavily 搜索时，先运行本 Skill 生成 `runtime/tavily_search_plan.json`，再让 OpenClaw 使用 `tavily-search-wrapper` 调用 `tavily-search` skill，并把结果写回 `runtime/tavily_search_results.json`。
 
-写回后再次运行本 Skill，搜索结果会自动进入采集、分诊、25 条候选和 Top10。
+写回后再次运行本 Skill，搜索结果会自动进入采集、分诊、候选池、LLM 主编终选 Top10 和页面摘要链路。
 
 ## Top10 精选协作
 
-本 Skill 的规则层会生成 `runtime/triage_candidates.json` 和兜底版 `runtime/top10_items.json`。最终日报建议再使用 `briefing-triage-skill`：
+当前流水线会自动生成 `runtime/triage_candidates.json`、富化完整候选池，并通过 `ai_triage` 生成 `runtime/ai_selected_top10.json`。其中：
 
 ```text
 runtime/triage_candidates.json
-  -> OpenClaw 打开链接、理解内容、精选 Top10
+  -> runtime/triage_candidates_enriched.json
+  -> LLM 生成中文 summary_main / why_it_matters / key_points
+  -> LLM 主编终选 Top10
   -> runtime/ai_selected_top10.json
+  -> runtime/top10_editorial_ready.json
 ```
 
-看板会优先展示 `runtime/ai_selected_top10.json`；如果该文件不存在，才展示规则版 `runtime/top10_items.json`。
+看板会优先展示 `runtime/top10_editorial_ready.json`；如果该文件不存在，再依次回退到 `ai_selected_top10.json`、`top10_enriched_items.json` 和规则版 `top10_items.json`。
+
+只有当用户明确要求人工/交互式复核候选池时，才再使用 `briefing-triage-skill`。
 
 ## 邮件事件队列
 
@@ -54,5 +61,5 @@ python skills/information-collector-skill/scripts/run_information_collector.py
 ## 回复要求
 
 - 必须给出可点击的看板链接。
-- 必须说明采集总数、初筛候选数量、Top10 数量、是否已使用 AI 精选、Urgent 数量、Important 数量和紧急事务数量。
+- 必须说明采集总数、候选池数量、Top10 数量、是否已使用 LLM 主编终选、Urgent 数量、Important 数量和紧急事务数量。
 - 如果动态看板未能稳定运行，应提示用户使用静态 HTML 看板链接。

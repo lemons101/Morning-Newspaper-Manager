@@ -3,7 +3,7 @@
 Morning-Newspaper-Manager 是一个围绕 **AI 早报生产链路** 构建的完整项目：
 
 - 多来源采集候选信息
-- 去重、triage、候选池与 Top10 收敛
+- 去重、triage、LLM 候选粗筛与 LLM 主编 Top10 终选
 - 正文抓取与清洗
 - 基于网页正文与大模型生成中文编辑摘要
 - 生成 `top10_editorial_ready.json`
@@ -18,11 +18,11 @@ Morning-Newspaper-Manager 是一个围绕 **AI 早报生产链路** 构建的完
 
 这个项目的核心目标不是“抓很多信息”，而是：
 
-> **每天稳定地从多来源收集 AI 相关信号，收敛成更值得看的 Top10，基于网页正文与大模型生成中文编辑摘要，并通过固定页面与自动推送稳定交付。**
+> **每天稳定地从多来源收集 AI 相关信号，先收敛成高质量候选池，再由大模型按主编口径终选 Top10，并基于网页正文生成中文编辑摘要，通过固定页面与自动推送稳定交付。**
 
 从产品视角看，它包含 4 层：
 
-1. **采集与分诊层**：采集、标准化、去重、triage、候选池、Top10
+1. **采集与分诊层**：采集、标准化、去重、triage、候选池、LLM 主编 Top10
 2. **内容增强层**：正文抓取、正文清洗、网页正文理解
 3. **编辑中间层**：生成 `summary_main` / `why_it_matters` / `key_points` / `card_summary`
 4. **展示与交付层**：`final_newspaper.*`、`dashboard.html`、固定链接、自动推送
@@ -35,9 +35,10 @@ Morning-Newspaper-Manager 是一个围绕 **AI 早报生产链路** 构建的完
 信息来源
   -> 采集与标准化
   -> enrich / 去重 / triage
-  -> 候选池 / Top10
-  -> 正文增强与清洗
+  -> LLM 候选粗筛
+  -> 候选池正文增强与清洗
   -> 大模型基于网页正文生成中文编辑摘要
+  -> LLM 主编终选 Top10
   -> top10_editorial_ready.json
   -> final_newspaper.json / final_newspaper.md
   -> runtime/dashboard.html
@@ -47,7 +48,9 @@ Morning-Newspaper-Manager 是一个围绕 **AI 早报生产链路** 构建的完
 
 ### 关键设计判断
 
-- `top10_editorial_ready.json` 是内容中间核心
+- `triage_candidates.json` 是候选池核心，默认约 15 条
+- `ai_selected_top10.json` 是 LLM 主编终选结果；不可用时回退到规则排序
+- `top10_editorial_ready.json` 是页面展示前的内容中间核心
 - 页面“主要内容”应优先来自：
   - `summary_main`
   - `key_points`
@@ -81,11 +84,15 @@ Morning-Newspaper-Manager 是一个围绕 **AI 早报生产链路** 构建的完
 - enrich / link preview
 - 去重
 - triage
-- 候选池排序
-- Top10 输出
+- LLM 候选粗筛，生成 `triage_candidates.json`
+- 候选池正文富化，生成 `triage_candidates_enriched.json`
+- LLM 生成中文 `summary_main` / `why_it_matters` / `key_points`
+- LLM 主编终选 Top10，生成 `ai_selected_top10.json`
+
+最终 Top10 不是机械按分数排序。规则层负责召回、去重、优先级和兜底；大模型负责在候选池里按 AI 主线、新闻价值、可信度、版面多样性和中文摘要质量做最终取舍。如果大模型不可用或输出格式异常，系统自动回退到规则排序。
 
 ### 3.3 editorial-ready 中间层
-Top10 不直接上页面，而是先生成更可编辑的中间层：
+LLM 选出的 Top10 不直接上页面，而是先生成更可编辑的中间层：
 
 - 正文重抓
 - 文本清洗
@@ -100,6 +107,7 @@ Top10 不直接上页面，而是先生成更可编辑的中间层：
 - `summary_main` 必须优先写“这条讲了什么”
 - `why_it_matters` 只补“为什么值得看”
 - `主要内容` 不接受英文残片、网页导航残片、系统解释口吻
+- 英文来源也必须理解后改写成自然中文，允许保留 OpenAI、GitHub、MCP、CVE 等专有名词
 - 即使正文不足，也应该尽量产出自然中文摘要，而不是把 fallback 写成系统说明
 
 ### 3.4 最终晨报与页面

@@ -33,7 +33,7 @@ runtime/tavily_search_results.json
 6. 每个主题最多保留 `max_items` 条结果，默认 5 条。
 7. 对所有主题结果做 URL 去重，并避免重复上一期早报已经收录的内容。
 8. 将结果写入 `runtime/tavily_search_results.json`。
-9. 告知用户：需要再次运行 `information-collector-skill`，让搜索结果进入采集、分诊、25 条候选和 Top10。
+9. 告知用户：需要再次运行 `information-collector-skill`，让搜索结果进入采集、分诊、候选池和 LLM 主编 Top10 终选。
 
 ## 搜索计划字段
 
@@ -154,6 +154,6 @@ runtime/tavily_search_results.json
 - 已读取的主题数量。
 - 实际写回的结果数量。
 - 输出文件路径：`runtime/tavily_search_results.json`。
-- 下一步需要再次运行 `information-collector-skill`，把搜索结果纳入分诊和 Top10。
+- 下一步需要再次运行 `information-collector-skill`，把搜索结果纳入分诊、候选池、LLM 主编终选 Top10 和页面摘要链路。
 
 如果没有写回任何结果，说明失败原因，例如：搜索计划为空、Tavily skill 不可用、所有结果被去重或过滤。
