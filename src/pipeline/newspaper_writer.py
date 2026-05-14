@@ -15,13 +15,15 @@ MAX_FETCH_ITEMS = 10
 MAX_WORKERS = 2
 MIN_GOOD_BODY_LENGTH = 400
 FETCH_TIMEOUT_SECONDS = 6
+SUMMARY_MAIN_LIMIT = 360
 
 
 def run_newspaper_writer(root: Path) -> Path:
     runtime = root / 'runtime'
     ai_top10 = _read_items(runtime / 'ai_selected_top10.json')
     enriched_top10 = _read_items(runtime / 'top10_enriched_items.json')
-    merged = _merge_items(ai_top10, enriched_top10)
+    enriched_candidates = _read_items(runtime / 'triage_candidates_enriched.json')
+    merged = _merge_items(ai_top10, enriched_candidates, enriched_top10)
 
     editorial_top10 = _build_editorial_top10(merged)
     editorial_payload = {
@@ -61,8 +63,11 @@ def _read_items(path: Path) -> List[Dict[str, Any]]:
     return [item for item in items if isinstance(item, dict)]
 
 
-def _merge_items(ai_top10: List[Dict[str, Any]], enriched_top10: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    enriched_by_id = {str(item.get('item_id', '')): item for item in enriched_top10}
+def _merge_items(ai_top10: List[Dict[str, Any]], *enriched_sources: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    enriched_by_id: Dict[str, Dict[str, Any]] = {}
+    for source_items in enriched_sources:
+        for item in source_items:
+            enriched_by_id[str(item.get('item_id', ''))] = item
     merged: List[Dict[str, Any]] = []
     for item in ai_top10:
         row = dict(enriched_by_id.get(str(item.get('item_id', '')), {}))
@@ -70,7 +75,10 @@ def _merge_items(ai_top10: List[Dict[str, Any]], enriched_top10: List[Dict[str, 
         merged.append(row)
     if merged:
         return merged
-    return enriched_top10
+    for source_items in enriched_sources:
+        if source_items:
+            return source_items
+    return []
 
 
 def _build_editorial_top10(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -101,6 +109,7 @@ def _build_editorial_top10(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         source_name = str(item.get('source_name') or '').strip()
         source_type = str(item.get('source_type') or '').strip()
         summary_zh = str(item.get('summary_zh') or item.get('summary') or '').strip()
+        existing_summary_main = str(item.get('summary_main') or '').strip()
         why = str(item.get('why_it_matters') or '').strip()
         summary_basis = str(item.get('summary_basis') or item.get('content_basis') or '').strip()
 
@@ -110,11 +119,9 @@ def _build_editorial_top10(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         card_summary = _card_summary(raw_title, editorial_focus, editorial_summary_hint, body_quality)
         title_zh = _normalize_title_zh(card_title, raw_title, source_type, source_name, title_zh_seed)
         generated_summary_zh = _generate_source_specific_summary(raw_title, source_type, source_name, body, summary_zh, editorial_summary_hint, body_quality)
-        normalized_summary_zh = generated_summary_zh or summary_zh
-        if source_type in {'github_advisory', 'hackernews_top', 'tavily_skill', 'tavily_search'}:
-            clean_fallback = _safe_clean_summary_fallback(raw_title, source_type, source_name, body, summary_zh, editorial_summary_hint)
-            if clean_fallback:
-                normalized_summary_zh = clean_fallback
+        normalized_summary_zh = existing_summary_main or generated_summary_zh or summary_zh
+        if existing_summary_main and _is_publishable_chinese_summary(existing_summary_main):
+            normalized_summary_zh = existing_summary_main
         elif _should_force_clean_fallback(source_type, body_quality, summary_basis, normalized_summary_zh, editorial_summary_hint):
             clean_fallback = _safe_clean_summary_fallback(raw_title, source_type, source_name, body, summary_zh, editorial_summary_hint)
             normalized_summary_zh = clean_fallback or normalized_summary_zh
@@ -122,11 +129,13 @@ def _build_editorial_top10(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         why_main = _normalize_why_it_matters(str(item.get('why_it_matters') or '').strip(), raw_title, source_type, source_name, body, body_quality, summary_basis=summary_basis)
         key_points = _build_key_points(raw_title, source_type, source_name, body, summary_main, summary_basis=summary_basis, body_quality=body_quality)
 
-        if summary_basis == 'full_text' and _looks_like_raw_page_dump(summary_main):
+        if existing_summary_main and _is_publishable_chinese_summary(existing_summary_main):
+            summary_main = _trim_text(existing_summary_main, SUMMARY_MAIN_LIMIT)
+        elif summary_basis == 'full_text' and _looks_like_raw_page_dump(summary_main):
             summary_main = _safe_clean_summary_fallback(raw_title, source_type, source_name, body, summary_zh, editorial_summary_hint)
-        if summary_basis == 'partial_text' and (_looks_like_raw_page_dump(summary_main) or not _looks_chinese(summary_main)):
+        if not (existing_summary_main and _is_publishable_chinese_summary(existing_summary_main)) and summary_basis == 'partial_text' and (_looks_like_raw_page_dump(summary_main) or not _looks_chinese(summary_main)):
             summary_main = _safe_clean_summary_fallback(raw_title, source_type, source_name, body, summary_zh, editorial_summary_hint)
-        if _should_force_clean_fallback(source_type, body_quality, summary_basis, summary_main, editorial_summary_hint):
+        if not (existing_summary_main and _is_publishable_chinese_summary(existing_summary_main)) and _should_force_clean_fallback(source_type, body_quality, summary_basis, summary_main, editorial_summary_hint):
             summary_main = _safe_clean_summary_fallback(raw_title, source_type, source_name, body, summary_zh, editorial_summary_hint)
         editorial_items.append({
             'rank': idx,
@@ -305,27 +314,27 @@ def _safe_clean_summary_fallback(title: str, source_type: str, source_name: str,
     facts = _extract_fact_sentences(body)
     fact_summary = _compose_summary_from_facts(title, source_type, facts, fallback=summary_zh or editorial_hint)
     if fact_summary and _is_publishable_chinese_summary(fact_summary):
-        return _trim_text(fact_summary, 220)
+        return _trim_text(fact_summary, SUMMARY_MAIN_LIMIT)
     for candidate in [editorial_hint, summary_zh]:
         value = str(candidate or '').strip()
         if value and not _looks_like_raw_page_dump(value) and _looks_chinese(value) and _is_publishable_chinese_summary(value):
-            return _trim_text(value, 220)
+            return _trim_text(value, SUMMARY_MAIN_LIMIT)
     hint = _editorial_summary_hint(title, source_type, source_name, body, summary_zh)
     if not _is_publishable_chinese_summary(hint):
         generated = _generate_source_specific_summary(title, source_type, source_name, body, summary_zh, editorial_hint, 'limited')
         if _is_publishable_chinese_summary(generated):
-            return _trim_text(generated, 220)
+            return _trim_text(generated, SUMMARY_MAIN_LIMIT)
     hint = str(hint or '').strip()
     if hint and not _looks_like_raw_page_dump(hint):
-        return _trim_text(hint, 220)
+        return _trim_text(hint, SUMMARY_MAIN_LIMIT)
     rewritten = _rewrite_summary_from_body(title, body, fallback=summary_zh or editorial_hint)
     rewritten = str(rewritten or '').strip()
     if rewritten and _is_publishable_chinese_summary(rewritten):
-        return _trim_text(rewritten, 220)
+        return _trim_text(rewritten, SUMMARY_MAIN_LIMIT)
     generated = _generate_source_specific_summary(title, source_type, source_name, body, summary_zh, editorial_hint, 'thin')
     if _is_publishable_chinese_summary(generated):
-        return _trim_text(generated, 220)
-    return _trim_text(summary_zh or editorial_hint or title, 220)
+        return _trim_text(generated, SUMMARY_MAIN_LIMIT)
+    return _trim_text(summary_zh or editorial_hint or title, SUMMARY_MAIN_LIMIT)
 
 
 def _editorial_focus(title: str, source_type: str, source_name: str, body: str) -> str:
@@ -767,7 +776,7 @@ def _normalize_summary_main(card_summary: str, hint: str, summary_zh: str, body_
             if str(x or '').strip() and _is_publishable_chinese_summary(str(x or '').strip())
         ]
         if publishable_candidates:
-            return _trim_text(publishable_candidates[0], 220)
+            return _trim_text(publishable_candidates[0], SUMMARY_MAIN_LIMIT)
         return _evidence_insufficient_summary(source_type)
     weak_markers = [
         '这条内容当前更像一个社区讨论入口',
@@ -781,29 +790,29 @@ def _normalize_summary_main(card_summary: str, hint: str, summary_zh: str, body_
     for candidate in zh_candidates:
         text = str(candidate or '').strip()
         if text and _looks_like_good_zh_summary(text) and not any(m in text for m in weak_markers):
-            return _trim_text(text, 220)
+            return _trim_text(text, SUMMARY_MAIN_LIMIT)
 
     targeted = _metadata_summary_by_source(source_type, ' '.join([str(title or ''), str(summary_zh or ''), str(card_summary or ''), str(hint or '')]).strip())
     if targeted and _looks_chinese(targeted):
         lowered = targeted.lower()
         if not any(x in lowered for x in ['值得继续观察', '更适合作为', '正在开发者社区被关注的项目、方法或观点', '来自外部搜索结果']):
-            return _trim_text(targeted, 220)
+            return _trim_text(targeted, SUMMARY_MAIN_LIMIT)
 
     if summary_basis == 'metadata_only':
         return _evidence_insufficient_summary(source_type)
     if summary_basis == 'partial_text':
         best = str(summary_zh or card_summary or hint or '').strip()
         if best and _is_publishable_chinese_summary(best) and not any(m in best for m in weak_markers):
-            return _trim_text(best, 220)
+            return _trim_text(best, SUMMARY_MAIN_LIMIT)
         return _evidence_insufficient_summary(source_type)
     for candidate in zh_candidates:
         text = str(candidate or '').strip()
         if text and _looks_chinese(text) and not _is_weak_summary(text) and not any(m in text for m in weak_markers):
-            return _trim_text(text, 220)
+            return _trim_text(text, SUMMARY_MAIN_LIMIT)
     if body_quality in {'missing', 'thin'}:
         return _evidence_insufficient_summary(source_type)
     fallback = str(summary_zh or card_summary or hint or '').strip()
-    return _trim_text(targeted or fallback, 220)
+    return _trim_text(targeted or fallback, SUMMARY_MAIN_LIMIT)
 
 
 def _is_publishable_chinese_summary(text: str) -> bool:
@@ -812,13 +821,14 @@ def _is_publishable_chinese_summary(text: str) -> bool:
         return False
     blocked = [
         'GitHub Reviewed', 'Published May', 'Updated May', 'Hacker News item score=', 'points by ', 'author=',
-        'severity=', '## Summary', 'Write better code with AI', 'Open source AI coding agent | Hacker News'
+        'severity=', '## Summary', 'Write better code with AI', 'Open source AI coding agent | Hacker News',
+        'We read every piece of feedback', 'feedback form', 'Submit feedback', 'Provide feedback', '提交反馈'
     ]
     if any(mark in s for mark in blocked):
         return False
     if len(re.findall(r'[\u4e00-\u9fff]', s)) < 20:
         return False
-    if len(re.findall(r'[A-Za-z]{4,}', s)) > 14:
+    if len(re.findall(r'[A-Za-z]{4,}', s)) > 18:
         return False
     return True
 
@@ -1162,6 +1172,10 @@ def _looks_like_good_zh_summary(text: str) -> bool:
         'sign in subscribe',
         'posts rss',
         'rss contact',
+        'we read every piece of feedback',
+        'feedback form',
+        'submit feedback',
+        'provide feedback',
         '围绕一个正在被开发者集中讨论的技术主题展开',
         '重点在于说明受影响组件',
         '网页导航 · 完整目录 · english readme',

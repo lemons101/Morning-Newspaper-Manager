@@ -334,6 +334,11 @@ def _looks_like_good_chinese_summary(text: str) -> bool:
         'POSTS Local AI Needs to be the Norm',
         'This article',
         'One of the current trends in modern software',
+        'We read every piece of feedback',
+        'feedback form',
+        'Submit feedback',
+        'Provide feedback',
+        '提交反馈',
         '这条内容值得关注，因为它对应的是一个更具体的工程、产品或行业变化，而不只是表面上的热闹话题。',
         '该信息值得关注，可作为今日早报的背景材料。',
         '这条内容当前更像一个社区讨论入口，重点不是页面碎片本身，而是先把它到底在讲什么、为什么会被开发者集中讨论这两件事讲清楚。',
@@ -344,7 +349,7 @@ def _looks_like_good_chinese_summary(text: str) -> bool:
         return False
     zh_chars = len(re.findall(r'[\u4e00-\u9fff]', text))
     ascii_words = len(re.findall(r'[A-Za-z]{4,}', text))
-    return zh_chars >= 20 and ascii_words <= 12
+    return zh_chars >= 20 and ascii_words <= 18
 
 
 def _pick_clean_display_summary(item: Dict[str, Any], lead_mode: bool = False) -> str:

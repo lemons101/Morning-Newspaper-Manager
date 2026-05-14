@@ -17,10 +17,10 @@ LLM_TIMEOUT_SECONDS = 45
 
 def run_ai_triage(root: Path) -> Path:
     runtime = root / 'runtime'
-    candidates = _read_items(runtime / 'top10_enriched_items.json') or _read_items(runtime / 'triage_candidates_enriched.json') or _read_items(runtime / 'triage_candidates.json')
+    candidates = _read_items(runtime / 'triage_candidates_enriched.json') or _read_items(runtime / 'top10_enriched_items.json') or _read_items(runtime / 'triage_candidates.json')
     prepared = _prepare_candidates(candidates[:MAX_CANDIDATES])
     summarized = [_summarize_candidate(item) for item in prepared]
-    selected = _select_top10(summarized)
+    selected, selection_method = _select_top10(summarized, runtime=runtime)
 
     summarized_payload = {
         'generated_at': _now_iso(),
@@ -33,7 +33,7 @@ def run_ai_triage(root: Path) -> Path:
 
     payload = {
         'generated_at': _now_iso(),
-        'selection_method': 'openclaw_ai_summary_rank_v1',
+        'selection_method': selection_method,
         'candidate_count': len(summarized),
         'count': len(selected),
         'items': selected,
@@ -131,10 +131,10 @@ def _summarize_candidate(item: Dict[str, Any]) -> Dict[str, Any]:
 def _maybe_llm_newspaper_summary(item: Dict[str, Any]) -> Dict[str, Any] | None:
     basis = str(item.get('summary_basis') or '')
     body_length = int(item.get('body_length') or 0)
-    source_type = str(item.get('source_type') or '')
-    if basis != 'full_text' or body_length < 1200:
+    fallback_summary = str(item.get('summary') or '').strip()
+    if basis not in {'full_text', 'partial_text', 'metadata_only'}:
         return None
-    if source_type == 'github_high_stars':
+    if body_length < 300 and len(fallback_summary) < 120:
         return None
     prompt = _build_llm_prompt(item)
     if not prompt:
@@ -184,21 +184,22 @@ def _build_llm_prompt(item: Dict[str, Any]) -> str:
         return ''
     return (
         '你是中文科技晨报编辑。请基于下面提供的材料，写成适合网页晨报展示的中文内容总结。\n\n'
-        '核心目标：summary_main 必须像真正晨报编辑写的“主要内容”，先讲这条到底讲了什么，再讲影响；要自然、具体、有信息量，不要像系统说明、项目资料卡或网页残片。summary_main 默认写成 2~3 句，不要只给一句过薄的短概括。\n\n'
+        '核心目标：summary_main 必须像真正晨报编辑写的“主要内容”，参考下面正面案例的写法：先讲这条到底讲了什么，再讲变化、影响或落点；要自然、具体、有信息量，不要像系统说明、项目资料卡或网页残片。summary_main 默认写成 2~3 句，长度可以更充分，不要只给一句过薄的短概括。\n\n'
         '要求：\n'
-        '1. 不要复述标题，不要照抄原文，不要输出网页导航、登录提示、评论区噪音。\n'
+        '1. 不要复述标题，不要照抄原文，不要输出网页导航、登录提示、评论区噪音、feedback/提交反馈表单、作者名或页面 chrome。\n'
         '2. summary_main 必须先回答“这条到底讲了什么”，写成像晨报正文的人话摘要；先讲事件/产品/漏洞/观点本身，再讲影响。尽量覆盖主线、事实承接、变化落点这 2~3 层信息，而不是只给一句很薄的标签式概括。\n'
         '3. why_it_matters 只能补充“为什么值得看”，不能重复 summary_main，也不能写成空泛套话。\n'
         '4. 禁止输出这类空话或编辑腔：如“值得关注”“引发持续讨论”“围绕某个技术主题展开”“重点在于说明”“对应某种行业变化”“这是一条安全公告”“这是一个近期在 GitHub 上升温的开源项目”。\n'
-        '5. 禁止输出这类脏内容：网页导航、登录提示、反爬页提示、README 目录串、评论数、点赞数、作者名、GitHub Advisory Database 页面 chrome、邮件列表页头。\n'
-        '6. summary_main 和 why_it_matters 必须用自然中文完整改写，不能直接复制英文句子；允许保留产品名、公司名、漏洞编号等专有名词。\n'
-        '7. key_points 也必须写成中文要点，禁止直接粘贴英文原句。\n'
-        '8. 如果正文不足或可信度有限，要保守表述，但仍要尽量说清楚“已知主线是什么”；不要用空泛模板句顶上。即使信息有限，也优先补足主体、动作、对象、结果中的至少两项。\n'
-        '9. 按来源类型把握口径：\n'
+        '5. 禁止输出这类脏内容：网页导航、登录提示、反爬页提示、README 目录串、评论数、点赞数、作者名、GitHub Advisory Database 页面 chrome、邮件列表页头、We read every piece of feedback、feedback form。\n'
+        '6. 即使原网页、标题、正文全是英文，也必须把事实理解后改写成自然中文；英文只能作为事实来源，不能把英文句子直接搬到 summary_main、why_it_matters 或 key_points 里。\n'
+        '7. summary_main 和 why_it_matters 必须用自然中文完整改写；允许保留产品名、公司名、漏洞编号、协议名、模型名等专有名词，例如 OpenAI、GitHub、MCP、CVE-2026-xxxx。\n'
+        '8. key_points 也必须写成中文要点，禁止直接粘贴英文原句。\n'
+        '9. 如果正文不足或可信度有限，要保守表述，但仍要尽量说清楚“已知主线是什么”；不要用空泛模板句顶上。即使信息有限，也优先补足主体、动作、对象、结果中的至少两项。\n'
+        '10. 按来源类型把握口径：\n'
         '   - Hacker News/讨论帖：先写讨论对象、事件或核心观点本身，禁止写“引发持续讨论”当主摘要。\n'
         '   - 安全公告：先写受影响对象、利用方式/触发条件、风险结果，禁止写“重点在于说明受影响组件”。\n'
         '   - GitHub 项目：先写项目做什么、解决什么问题、为什么被关注，禁止写 stars/forks/语言资料卡。\n'
-        '10. 仅输出 JSON，不要输出解释、代码块或额外文字。\n\n'
+        '11. 仅输出 JSON，不要输出解释、代码块或额外文字。\n\n'
         '正面案例（合格风格）：\n'
         '{"summary_main":"这条内容讲的是 Instructure 旗下教学平台 Canvas 在疑似勒索软件事件后发生服务中断，攻击者还威胁泄露学校数据。报道把焦点放在服务可用性与数据泄露风险同时抬升这件事上，因为学校对关键 SaaS 的依赖一旦出问题，影响往往会从课堂运行迅速扩散到敏感数据保护。","why_it_matters":"它提醒学校和企业，关键 SaaS 一旦出问题，影响往往不只停留在服务可用性，还会迅速扩大到数据安全和业务连续性。","key_points":["Canvas 发生服务中断。","攻击者威胁泄露学校数据。","风险同时涉及可用性和敏感数据。"]}\n'
         '{"summary_main":"这条公告讲的是 utcp-http 在复用 OpenAPI 里声明的 servers[0].url 时没有重新做边界校验，攻击者可以借此把工具调用引向内部地址，进一步把 agent 变成盲 SSRF 跳板。问题的关键不只是一次错误请求，而是工具调用链把原本应该被拦住的内部地址重新暴露给了外部输入。","why_it_matters":"它暴露出 agent 工具调用链里的信任边界问题，影响不只是一条 HTTP 请求，而是整个工具执行面。","key_points":["OpenAPI 声明地址被直接复用。","攻击者可诱导工具请求内部地址。","风险可扩展到内网探测和云元数据访问。"]}\n'
@@ -250,10 +251,12 @@ def _parse_llm_summary_text(text: str) -> Dict[str, Any] | None:
     key_points = data.get('key_points') or []
     if not isinstance(key_points, list):
         key_points = []
-    key_points = [_trim(str(x).strip(), 120) for x in key_points if str(x).strip()][:3]
+    key_points = [_trim(str(x).strip(), 160) for x in key_points if str(x).strip()][:3]
     if not summary_main:
         return None
     if _looks_mostly_english(summary_main):
+        return None
+    if not _looks_publishable_chinese(summary_main):
         return None
     if why_it_matters and _looks_mostly_english(why_it_matters):
         why_it_matters = ''
@@ -266,13 +269,16 @@ def _parse_llm_summary_text(text: str) -> Dict[str, Any] | None:
         'Anubis',
         'English README',
         '完整目录',
+        'We read every piece of feedback',
+        'feedback form',
+        '提交反馈',
     ]
     if any(marker in summary_main for marker in blocked_summary_markers):
         return None
-    key_points = [p for p in key_points if not _looks_mostly_english(p)]
+    key_points = [p for p in key_points if not _looks_mostly_english(p) and _looks_publishable_chinese(p)]
     return {
-        'summary_main': _trim(summary_main, 180),
-        'why_it_matters': _trim(why_it_matters, 120),
+        'summary_main': _trim(summary_main, 320),
+        'why_it_matters': _trim(why_it_matters, 180),
         'key_points': key_points,
     }
 
@@ -292,7 +298,8 @@ def _clean_for_llm(text: str) -> str:
             'use saved searches', 'include my email address', 'sign in to github', 'reload to refresh your session',
             'all available qualifiers', 'we read every piece of feedback', 'share this article', 'advertisement',
             'github advisory database', 'hacker news item score=', 'author=priorityleft', 'anubis to protect the server',
-            'linux kernel runtime guard free & open source for any platform', 'free & open source for unix'
+            'linux kernel runtime guard free & open source for any platform', 'free & open source for unix',
+            'provide feedback', 'submit feedback', 'feedback form'
         ]):
             continue
         if _looks_noisy(s):
@@ -308,6 +315,15 @@ def _looks_mostly_english(text: str) -> bool:
     zh = len(re.findall(r'[\u4e00-\u9fff]', s))
     latin = len(re.findall(r'[A-Za-z]', s))
     return zh < 8 and latin > 30
+
+
+def _looks_publishable_chinese(text: str) -> bool:
+    s = (text or '').strip()
+    if not s:
+        return False
+    zh = len(re.findall(r'[\u4e00-\u9fff]', s))
+    latin_words = len(re.findall(r'[A-Za-z]{4,}', s))
+    return zh >= 18 and latin_words <= 18
 
 
 def _build_summary_main(title: str, body: str, basis: str) -> str:
@@ -440,30 +456,221 @@ def _confidence_score(level: str) -> float:
     return {'high': 0.95, 'medium': 0.7, 'low': 0.4}.get(level, 0.4)
 
 
-def _select_top10(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _select_top10(items: List[Dict[str, Any]], *, runtime: Path) -> tuple[List[Dict[str, Any]], str]:
+    llm_selected = _select_top10_by_llm(items, runtime=runtime)
+    if llm_selected:
+        return llm_selected, 'openclaw_ai_editorial_pick_v1'
+    return _select_top10_by_rules(items), 'openclaw_ai_summary_rank_v1_fallback'
+
+
+def _select_top10_by_rules(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     ranked = sorted(items, key=_rank_key, reverse=True)
     rows = []
     for idx, item in enumerate(ranked[:MAX_SELECTED], 1):
-        rows.append({
-            'rank': idx,
-            'item_id': item.get('item_id', ''),
-            'priority': item.get('priority', 'Important'),
-            'title_zh': item.get('title_zh') or item.get('title') or '(untitled)',
-            'title_en': item.get('title_en') or item.get('title') or '(untitled)',
-            'summary_zh': item.get('summary_main') or item.get('summary_llm') or item.get('summary') or '',
-            'summary_en': item.get('summary') or '',
-            'key_points': item.get('key_points', []),
-            'why_it_matters': item.get('why_it_matters', ''),
-            'summary_basis': item.get('summary_basis', ''),
-            'summary_confidence': item.get('summary_confidence', 'low'),
-            'summary_warnings': item.get('summary_warnings', []),
-            'source_name': item.get('source_name', ''),
-            'source_type': item.get('source_type', ''),
-            'published_at': item.get('published_at', ''),
-            'url': item.get('url', ''),
-            'final_ai_score': item.get('final_ai_score', 0),
-        })
+        rows.append(_selected_row(item, idx, selection_reason=str(item.get('editorial_reason') or '规则兜底排序保留。')))
     return rows
+
+
+def _select_top10_by_llm(items: List[Dict[str, Any]], *, runtime: Path) -> List[Dict[str, Any]]:
+    if len(items) <= 1:
+        return []
+    prompt = _build_editorial_selection_prompt(items)
+    if not prompt:
+        return []
+
+    prompt_payload = {
+        'generated_at': _now_iso(),
+        'candidate_count': len(items),
+        'prompt': prompt,
+    }
+    (runtime / 'top10_editorial_selection_prompt.json').write_text(
+        json.dumps(prompt_payload, ensure_ascii=False, indent=2), encoding='utf-8'
+    )
+
+    try:
+        result = subprocess.run(
+            [
+                'openclaw', 'infer', 'model', 'run',
+                '--json',
+                '--model', LLM_MODEL,
+                '--prompt', prompt,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=LLM_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except Exception:
+        return []
+    if result.returncode != 0:
+        return []
+
+    raw_text = (result.stdout or '').strip()
+    if not raw_text:
+        return []
+    selected_ids, reason_by_id = _parse_editorial_selection_text(raw_text)
+    if not selected_ids:
+        return []
+
+    by_id = {str(item.get('item_id') or ''): item for item in items}
+    selected: List[Dict[str, Any]] = []
+    seen = set()
+    for item_id in selected_ids:
+        if item_id in seen or item_id not in by_id:
+            continue
+        item = by_id[item_id]
+        if not _is_selectable_top10_item(item):
+            continue
+        seen.add(item_id)
+        selected.append(_selected_row(item, len(selected) + 1, selection_reason=reason_by_id.get(item_id, 'LLM 主编选择。')))
+        if len(selected) >= MAX_SELECTED:
+            break
+
+    if len(selected) < min(MAX_SELECTED, len(items)):
+        for item in sorted(items, key=_rank_key, reverse=True):
+            item_id = str(item.get('item_id') or '')
+            if item_id in seen or not _is_selectable_top10_item(item):
+                continue
+            seen.add(item_id)
+            selected.append(_selected_row(item, len(selected) + 1, selection_reason='LLM 未补满，规则兜底补位。'))
+            if len(selected) >= min(MAX_SELECTED, len(items)):
+                break
+    return selected[:MAX_SELECTED]
+
+
+def _selected_row(item: Dict[str, Any], rank: int, *, selection_reason: str = '') -> Dict[str, Any]:
+    return {
+        'rank': rank,
+        'item_id': item.get('item_id', ''),
+        'priority': item.get('priority', 'Important'),
+        'title_zh': item.get('title_zh') or item.get('title') or '(untitled)',
+        'title_en': item.get('title_en') or item.get('title') or '(untitled)',
+        'summary_zh': item.get('summary_main') or item.get('summary_llm') or item.get('summary') or '',
+        'summary_en': item.get('summary') or '',
+        'key_points': item.get('key_points', []),
+        'why_it_matters': item.get('why_it_matters', ''),
+        'summary_basis': item.get('summary_basis', ''),
+        'summary_confidence': item.get('summary_confidence', 'low'),
+        'summary_warnings': item.get('summary_warnings', []),
+        'source_name': item.get('source_name', ''),
+        'source_type': item.get('source_type', ''),
+        'published_at': item.get('published_at', ''),
+        'url': item.get('url', ''),
+        'final_ai_score': item.get('final_ai_score', 0),
+        'editorial_selection_reason': _trim(selection_reason, 180),
+    }
+
+
+def _build_editorial_selection_prompt(items: List[Dict[str, Any]]) -> str:
+    candidates = []
+    for idx, item in enumerate(items, 1):
+        candidates.append({
+            'candidate_no': idx,
+            'item_id': str(item.get('item_id') or ''),
+            'title': _trim(str(item.get('title') or ''), 180),
+            'source_name': _trim(str(item.get('source_name') or ''), 80),
+            'source_type': _trim(str(item.get('source_type') or ''), 60),
+            'published_at': _trim(str(item.get('published_at') or ''), 64),
+            'priority': str(item.get('priority') or 'FYI'),
+            'candidate_score': item.get('candidate_score', ''),
+            'heat_score': item.get('heat_score', ''),
+            'ai_relevance_score': item.get('ai_relevance_score', ''),
+            'final_ai_score': item.get('final_ai_score', 0),
+            'summary_main': _trim(str(item.get('summary_main') or item.get('summary_llm') or item.get('summary') or ''), 420),
+            'why_it_matters': _trim(str(item.get('why_it_matters') or ''), 220),
+            'summary_confidence': item.get('summary_confidence', ''),
+            'summary_warnings': item.get('summary_warnings', []),
+        })
+    return (
+        '你是中文 AI 晨报的主编。下面有一组已经粗筛过的候选新闻，请你做最终 Top10 选题。\n\n'
+        '你的任务不是机械按分数排序，而是像主编一样选择今天最值得读、信息密度最高、组合最均衡的 10 条。\n\n'
+        '选择原则：\n'
+        '1. AI 主线优先：模型、Agent、开发工具、开源项目、企业 AI 落地、AI 安全、AI 监管优先。\n'
+        '2. 新闻价值优先：有新事实、新产品、新风险、新趋势、新证据的内容优先；泛泛讨论、旧闻、页面噪声降权。\n'
+        '3. 信息可信优先：summary_confidence 高、summary_main 具体可读的内容优先；正文不足但标题价值很高的可以少量保留。\n'
+        '4. 保持版面多样性：不要让 Top10 全是 GitHub 项目或全是安全公告；安全、工具、产业、社区讨论可以适度混合。\n'
+        '5. 英文来源没关系，但最终晨报面向中文读者；如果某条摘要仍像英文拼贴、网页 chrome 或 feedback 表单内容，应降权。\n'
+        '6. 如果候选不足 10 条，就输出尽可能多的有效条目；不要编造不存在的 item_id。\n\n'
+        '仅输出 JSON，不要输出解释、Markdown 或代码块。JSON 格式如下：\n'
+        '{"selected":[{"item_id":"...","reason":"一句中文说明为什么入选"}]}\n\n'
+        f'候选列表：\n{json.dumps(candidates, ensure_ascii=False, indent=2)}\n'
+    )
+
+
+def _parse_editorial_selection_text(text: str) -> tuple[List[str], Dict[str, str]]:
+    raw = (text or '').strip()
+    if not raw:
+        return [], {}
+    try:
+        payload = json.loads(raw)
+    except Exception:
+        extracted = _extract_text_from_infer_payload_silent(raw)
+        if extracted and extracted != raw:
+            return _parse_editorial_selection_text(extracted)
+        match = re.search(r'\{[\s\S]*\}', raw)
+        if not match:
+            return [], {}
+        try:
+            payload = json.loads(match.group(0))
+        except Exception:
+            return [], {}
+    if not isinstance(payload, dict):
+        return [], {}
+    if not any(key in payload for key in ['selected', 'items', 'top10']):
+        extracted = _extract_text_from_infer_payload(payload)
+        if extracted:
+            return _parse_editorial_selection_text(extracted)
+    selected = payload.get('selected') or payload.get('items') or payload.get('top10') or []
+    if not isinstance(selected, list):
+        return [], {}
+    ids: List[str] = []
+    reason_by_id: Dict[str, str] = {}
+    for entry in selected:
+        if isinstance(entry, str):
+            item_id = entry.strip()
+            reason = ''
+        elif isinstance(entry, dict):
+            item_id = str(entry.get('item_id') or entry.get('id') or '').strip()
+            reason = str(entry.get('reason') or entry.get('editorial_reason') or '').strip()
+        else:
+            continue
+        if not item_id or item_id in ids:
+            continue
+        ids.append(item_id)
+        if reason:
+            reason_by_id[item_id] = reason
+    return ids, reason_by_id
+
+
+def _extract_text_from_infer_payload_silent(raw: str) -> str:
+    try:
+        payload = json.loads(raw)
+    except Exception:
+        return ''
+    return _extract_text_from_infer_payload(payload)
+
+
+def _is_selectable_top10_item(item: Dict[str, Any]) -> bool:
+    if str(item.get('channel') or '') == 'mail_alert':
+        return False
+    summary = str(item.get('summary_main') or item.get('summary_zh') or item.get('summary_llm') or item.get('summary') or '')
+    if summary and _looks_like_raw_or_feedback_noise(summary):
+        return False
+    return True
+
+
+def _looks_like_raw_or_feedback_noise(text: str) -> bool:
+    lower = str(text or '').lower()
+    bad_markers = [
+        'we read every piece of feedback',
+        'feedback form',
+        'submit feedback',
+        'provide feedback',
+        'github advisory database github reviewed',
+        'navigation menu',
+        'skip to content',
+    ]
+    return any(marker in lower for marker in bad_markers)
 
 
 def _rank_key(item: Dict[str, Any]) -> tuple:

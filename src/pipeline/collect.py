@@ -20,7 +20,7 @@ from src.pipeline.link_preview import enrich_link_previews
 from src.pipeline.llm_candidate_triage import run_llm_candidate_triage, select_triage_candidates_by_llm
 from src.pipeline.newspaper_writer import run_newspaper_writer
 from src.pipeline.report import write_dict_items, write_items, write_source_report
-from src.triage.ranker import select_mail_alerts, select_top_items
+from src.triage.ranker import select_mail_alerts
 from src.triage.rules import triage_items
 
 
@@ -74,6 +74,8 @@ def main() -> None:
     triage_cfg = config["app"].get("triage", {})
     top_n = int(triage_cfg.get("top_n", 10)) if isinstance(triage_cfg, dict) else 10
     candidate_limit = int(triage_cfg.get("candidate_limit", 15)) if isinstance(triage_cfg, dict) else 15
+    output_dir = root / str(runtime_cfg.get("output_dir", "runtime"))
+    write_dict_items(triaged, output_dir / str(runtime_cfg.get("triage_items_file", "triage_items.json")))
     print("[阶段开始] llm_candidate_triage")
     llm_triage_path = run_llm_candidate_triage(root)
     llm_triaged_payload = json.loads(llm_triage_path.read_text(encoding='utf-8')) if llm_triage_path.exists() else {}
@@ -81,21 +83,19 @@ def main() -> None:
     triage_candidates = select_triage_candidates_by_llm(llm_triaged_items, limit=candidate_limit)
     print(f"[阶段完成] llm_candidate_triage items={len(llm_triaged_items)}")
     print(f"[阶段完成] triage_candidates items={len(triage_candidates)}")
-    enriched_candidates = [dict(item) for item in triage_candidates]
-    print("[阶段跳过] enrich triage_candidates")
-    top_items = triage_candidates[:max(1, top_n)]
-    print(f"[阶段完成] select_top_items items={len(top_items)}")
-    print("[阶段开始] enrich top_items")
-    enriched_top_items = enrich_candidates_with_content(
-        [dict(item) for item in top_items],
+    print("[阶段开始] enrich triage_candidates")
+    enriched_candidates = enrich_candidates_with_content(
+        [dict(item) for item in triage_candidates],
         root=root,
         enabled=True,
     )
-    print(f"[阶段完成] enrich top_items items={len(enriched_top_items)}")
+    print(f"[阶段完成] enrich triage_candidates items={len(enriched_candidates)}")
+    top_items = triage_candidates[:max(1, top_n)]
+    enriched_top_items = enriched_candidates[:max(1, top_n)]
+    print(f"[阶段完成] provisional_top_items items={len(top_items)}")
     mail_alerts = select_mail_alerts(triaged)
     print(f"[阶段完成] mail_alerts items={len(mail_alerts)}")
 
-    output_dir = root / str(runtime_cfg.get("output_dir", "runtime"))
     print(f"[阶段开始] write outputs dir={output_dir}")
     write_items(deduped, output_dir / str(runtime_cfg.get("collected_items_file", "collected_items.json")))
     write_items(deduped, output_dir / str(runtime_cfg.get("normalized_items_file", "normalized_items.json")))
