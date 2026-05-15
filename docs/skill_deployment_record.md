@@ -23,12 +23,17 @@ HTTPS 备用地址：https://github.com/lemons101/Morning-Newspaper-Manager.git
 请不要只复制 skill 子目录，必须 clone 完整仓库。
 
 初始化步骤：
-1. git clone git@github.com:lemons101/Morning-Newspaper-Manager.git
-2. cd Morning-Newspaper-Manager
-3. python3 -m venv .venv
-4. source .venv/bin/activate
-5. pip install -r requirements.txt
-6. 如果要接入邮箱告警，请在仓库根目录配置 .env，填入 IMAP_USER 和 IMAP_PASS
+1. mkdir -p /root/projects
+2. cd /root/projects
+3. git clone git@github.com:lemons101/Morning-Newspaper-Manager.git
+4. cd /root/projects/Morning-Newspaper-Manager
+5. python3 -m venv .venv
+6. source .venv/bin/activate
+7. pip install -r requirements.txt
+8. 如果要接入邮箱告警，请在仓库根目录配置 .env，填入 IMAP_USER 和 IMAP_PASS
+
+默认项目目录是：/root/projects/Morning-Newspaper-Manager。
+如果你把项目放在别的目录，请把下面所有命令里的 /root/projects/Morning-Newspaper-Manager 都替换成实际目录。
 
 每日生成命令：
 cd /root/projects/Morning-Newspaper-Manager
