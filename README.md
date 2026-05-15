@@ -119,15 +119,28 @@ LLM 选出的 Top10 不直接上页面，而是先生成更可编辑的中间层
 
 **重要：** 如果这个页面已经被当成正式访问入口使用，不要直接在 `runtime/` 上做排序实验、文案实验或来源替换实验。实验结果应先输出到独立的实验产物，再决定是否覆盖正式页面。
 
-### 3.5 展示成稿重写（推荐用于先做“好看版本”）
+### 3.5 展示成稿重写（现已并入正式发布链）
 
-如果当前主要目标不是先把整个自动链做成最稳，而是先做出“顺滑、无杂质、适合直接展示”的页面版本，推荐在 `top10_editorial_ready.json` 之后增加一层展示成稿重写：
+当前项目已经把 `display_rewrite` 视为正式发布前的成稿层，而不再只是“好看版本实验”。
 
+正式链路现在是：
+
+- writer 先生成基础：
+  - `runtime/top10_editorial_ready_base.json`
+  - `runtime/final_newspaper_base.json`
+- `scripts/run_display_rewrite.py` 直接把基础稿重写成正式展示稿：
+  - `runtime/top10_editorial_ready.json`
+  - `runtime/final_newspaper.json`
+- `scripts/rebuild_dashboard.py` 重建：
+  - `runtime/dashboard.html`
+
+相关文件：
 - Prompt：`references/display_rewrite_prompt.md`
-- 实验输入生成脚本：`scripts/run_display_rewrite_experiment.py`
-- 实验输出目录：`runtime_experiments/display_rewrite/`
+- 历史实验输入（保留参考）：`runtime_experiments/display_rewrite/display_rewrite_input.json`
+- 正式重写脚本：`scripts/run_display_rewrite.py`
+- 正式重写模块：`src/pipeline/display_rewrite.py`
 
-这条链的目标不是改采集，而是把已经入选的 Top10 条目统一重写成页面展示稿。
+这条链的目标不是改采集，而是把已经入选的 Top10 条目统一重写成页面展示稿，并直接成为正式页面输出。
 ### 3.5 自动更新与自动推送
 当前链路支持：
 

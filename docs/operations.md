@@ -95,6 +95,15 @@ cd /root/projects/Morning-Newspaper-Manager
 
 这是当前最稳定、最适合手机和外部访问的入口。
 
+### 重要运维约束
+
+如果这个页面已经被用户当成正式入口使用：
+
+- 不要直接在正式 `runtime/` 上做高风险重排实验
+- 不要用实验结果直接覆盖 `runtime/dashboard.html`
+- 排序实验、成稿实验、来源替换实验应优先写到独立实验产物
+- 只有在实验结果通过质量检查且人工确认更好时，再 promote 到正式 runtime
+
 ### 本地产物文件
 
 - `/root/projects/Morning-Newspaper-Manager/runtime/dashboard.html`

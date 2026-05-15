@@ -97,7 +97,19 @@ def _summarize_candidate(item: Dict[str, Any]) -> Dict[str, Any]:
         key_points = _build_key_points(title, body, source_type, source_name)
         why_it_matters = str(row.get('why_it_matters') or _build_why_it_matters(title, body, source_type, source_name)).strip()
         row['summary_generation_method'] = 'rule'
+    summary_main, key_points, why_it_matters, hygiene_warnings = _sanitize_candidate_copy(
+        row,
+        title,
+        source_type,
+        source_name,
+        body,
+        summary_basis,
+        summary_main,
+        key_points,
+        why_it_matters,
+    )
     warnings = _build_summary_warnings(title, summary_main, summary_basis, body_length)
+    warnings.extend(w for w in hygiene_warnings if w not in warnings)
     summary_confidence = _summary_confidence(summary_basis, body_length, warnings)
 
     topic_relevance_score = _topic_relevance_score(title, body, source_type, source_name)
@@ -163,13 +175,13 @@ def _maybe_llm_newspaper_summary(item: Dict[str, Any]) -> Dict[str, Any] | None:
     try:
         payload = json.loads(payload_text)
     except Exception:
-        return _parse_llm_summary_text(payload_text)
+        return _validate_llm_summary_for_item(item, _parse_llm_summary_text(payload_text))
 
     text = _extract_text_from_infer_payload(payload)
     if not text:
         return None
     parsed = _parse_llm_summary_text(text)
-    return parsed
+    return _validate_llm_summary_for_item(item, parsed)
 
 
 def _build_llm_prompt(item: Dict[str, Any]) -> str:
@@ -281,6 +293,164 @@ def _parse_llm_summary_text(text: str) -> Dict[str, Any] | None:
         'why_it_matters': _trim(why_it_matters, 180),
         'key_points': key_points,
     }
+
+
+def _validate_llm_summary_for_item(item: Dict[str, Any], parsed: Dict[str, Any] | None) -> Dict[str, Any] | None:
+    if not parsed:
+        return None
+    title = str(item.get('title') or '').strip()
+    source_type = str(item.get('source_type') or '').strip()
+    source_name = str(item.get('source_name') or '').strip()
+    body = str(item.get('body_text_clean') or item.get('body_text') or item.get('summary') or '').strip()
+    summary = str(parsed.get('summary_main') or '').strip()
+    why = str(parsed.get('why_it_matters') or '').strip()
+    points = [str(point).strip() for point in parsed.get('key_points') or [] if str(point).strip()]
+    if _copy_hygiene_issue(item, title, source_type, source_name, summary):
+        return None
+    if why and _copy_hygiene_issue(item, title, source_type, source_name, why):
+        why = ''
+    clean_points = [
+        point for point in points
+        if not _copy_hygiene_issue(item, title, source_type, source_name, point)
+    ][:3]
+    if source_type == 'github_advisory' and _looks_generic_security_copy(summary):
+        return None
+    if _looks_like_unrelated_body_fragment(title, body, summary):
+        return None
+    parsed['summary_main'] = summary
+    parsed['why_it_matters'] = why
+    parsed['key_points'] = clean_points
+    return parsed
+
+
+def _sanitize_candidate_copy(
+    row: Dict[str, Any],
+    title: str,
+    source_type: str,
+    source_name: str,
+    body: str,
+    summary_basis: str,
+    summary_main: str,
+    key_points: List[str],
+    why_it_matters: str,
+) -> tuple[str, List[str], str, List[str]]:
+    warnings: List[str] = []
+    if _copy_hygiene_issue(row, title, source_type, source_name, summary_main) or _looks_like_unrelated_body_fragment(title, body, summary_main):
+        warnings.append('summary_hygiene_rebuilt')
+        summary_main = _build_summary_main(title, body, summary_basis)
+        row['summary_generation_method'] = 'rule_after_hygiene_reject'
+    if source_type == 'github_advisory' and _looks_generic_security_copy(summary_main):
+        warnings.append('generic_security_summary_rebuilt')
+        summary_main = _build_summary_main(title, body, summary_basis)
+        row['summary_generation_method'] = 'rule_after_generic_security_reject'
+
+    clean_points: List[str] = []
+    for point in key_points:
+        point_text = str(point).strip()
+        if not point_text:
+            continue
+        if _copy_hygiene_issue(row, title, source_type, source_name, point_text):
+            warnings.append('key_point_hygiene_rejected')
+            continue
+        if _looks_like_unrelated_body_fragment(title, body, point_text):
+            warnings.append('key_point_topic_mismatch_rejected')
+            continue
+        clean_points.append(point_text)
+    if not clean_points:
+        clean_points = _build_key_points(title, body, source_type, source_name)
+
+    if _copy_hygiene_issue(row, title, source_type, source_name, why_it_matters):
+        warnings.append('why_it_matters_hygiene_rejected')
+        why_it_matters = _build_why_it_matters(title, body, source_type, source_name)
+
+    return summary_main, clean_points[:3], why_it_matters, warnings
+
+
+def _copy_hygiene_issue(item: Dict[str, Any], title: str, source_type: str, source_name: str, text: str) -> str:
+    value = str(text or '').strip()
+    if not value:
+        return 'empty'
+    if _looks_like_raw_or_feedback_noise(value):
+        return 'raw_page_noise'
+    lower = value.lower()
+    dirty_markers = [
+        'github reviewed', 'published may', 'updated may', 'dependabot alerts',
+        'hacker news item score=', 'points by ', 'author=', 'navigation menu',
+        'sign in', 'sign up', 'show all models', 'benchmarks nifty', 'rate story',
+        'english edition', "today's epaper", 'opencode.ai', 'github.blog',
+    ]
+    if any(marker in lower for marker in dirty_markers):
+        return 'dirty_marker'
+    if _topic_mismatch_for_copy(item, title, value):
+        return 'topic_mismatch'
+    if _looks_generic_editorial_copy(value):
+        return 'generic_editorial_copy'
+    if _looks_mostly_english(value):
+        return 'mostly_english'
+    return ''
+
+
+def _topic_mismatch_for_copy(item: Dict[str, Any], title: str, text: str) -> bool:
+    source = ' '.join([
+        title,
+        str(item.get('title_zh') or ''),
+        str(item.get('url') or ''),
+        str(item.get('body_text') or '')[:1400],
+    ]).lower()
+    output = str(text or '').lower()
+    marker_groups = [
+        (['odoh', 'oblivious dns', 'anonymous dns', 'dns relay', 'numa'], ['at&t', 'room 641a', 'mark klein', 'eff']),
+        (['claude for small business', 'anthropic.com/news/claude-for-small-business'], ['at&t', 'room 641a', 'mark klein', 'eff']),
+        (['strapi', 'cve-2026-22599', 'content type builder'], ['mistune', 'sharpcompress', 'ultrajson', 'lemmy']),
+        (['opencode'], ['copilot', 'claude for small business', 'aws revenue']),
+        (['copilot'], ['opencode', 'claude for small business']),
+    ]
+    return any(any(marker in source for marker in source_markers) and any(marker in output for marker in wrong_markers) for source_markers, wrong_markers in marker_groups)
+
+
+def _looks_generic_editorial_copy(text: str) -> bool:
+    value = str(text or '').strip()
+    markers = [
+        '这条内容值得关注', '值得关注', '继续观察', '更适合作为背景信号',
+        '更像一个近期升温的项目信号', '更像一个社区讨论入口',
+        '为什么会被开发者集中讨论', '适合作为补充阅读而不是主线内容',
+        '帮助团队快速形成核查动作', '这条 Hacker News 热门内容围绕一个技术主题展开',
+        '这条安全公告重点在于说明受影响组件', '这是一个近期升温的开源项目',
+    ]
+    mojibake_markers = [
+        '鍊煎緱鍏虫敞', '缁х画瑙傚療', '鏇撮€傚悎浣滀负鑳屾櫙淇″彿',
+        '鍥寸粫涓€涓鍦ㄨ寮€鍙戣€呴泦涓璁虹殑鎶€鏈富棰樺睍寮€',
+        '杩欐槸涓€涓繎鏈熷崌娓╃殑寮€婧愰」鐩',
+    ]
+    return any(marker in value for marker in markers + mojibake_markers)
+
+
+def _looks_generic_security_copy(text: str) -> bool:
+    value = str(text or '').strip()
+    markers = [
+        '这是一条 GitHub 安全公告，涉及',
+        '公告指出相关组件可能存在权限绕过、敏感信息暴露或配置保护不足等风险',
+        '需要确认版本范围、修复版本和是否存在实际暴露面',
+        '这条安全公告重点在于说明受影响组件',
+        '杩欐槸涓€鏉?GitHub 瀹夊叏鍏憡',
+        '鍏憡鎸囧嚭鐩稿叧缁勪欢鍙兘瀛樺湪鏉冮檺缁曡繃',
+    ]
+    return any(marker in value for marker in markers)
+
+
+def _looks_like_unrelated_body_fragment(title: str, body: str, text: str) -> bool:
+    haystack = f'{title} {body}'.lower()
+    output = str(text or '').lower()
+    if not output:
+        return False
+    wrong_clusters = [
+        ['at&t room 641a', 'mark klein', 'eff'],
+        ['benchmarks nifty', 'motilal oswal', 'rate story'],
+    ]
+    for cluster in wrong_clusters:
+        if any(marker in output for marker in cluster) and not any(marker in haystack for marker in cluster):
+            return True
+    return False
 
 
 def _clean_for_llm(text: str) -> str:

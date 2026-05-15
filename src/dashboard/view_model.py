@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone, timedelta
+import html
 import json
 from pathlib import Path
 import re
@@ -122,6 +123,7 @@ def _to_display_item(item: Dict[str, Any], rank: int) -> Dict[str, Any]:
     source_name = str(item.get("source_name", "")).strip()
     channel = str(item.get("channel", "")).strip()
     priority = _priority(item)
+    is_llm_display_rewrite = _is_llm_display_rewrite(item)
 
     # 页面层固定标题优先级：card_title > title_zh > title；不要在这里重新发明标题
     title_zh = str(item.get("card_title") or item.get("title_zh") or item.get("title") or "").strip() or _title_zh(title, summary, source_type, source_name, channel)
@@ -156,17 +158,25 @@ def _to_display_item(item: Dict[str, Any], rank: int) -> Dict[str, Any]:
             if _looks_like_content_summary(candidate):
                 summary_zh = candidate
                 break
+    if not _is_clean_display_summary(summary_zh, item):
+        fallback = _summary_zh(title, summary, source_type, source_name, channel, item)
+        summary_zh = fallback if _is_clean_display_summary(fallback, item) and _is_llm_display_rewrite(item) else ''
     summary_en = str(item.get("summary_en") or "").strip() or summary
     why_it_matters = str(item.get("why_it_matters") or "").strip()
-    key_points = _dedupe_key_points(summary_zh, [str(point).strip() for point in key_points if str(point).strip()])
+    key_points = _clean_key_points_for_display(
+        item,
+        summary_zh,
+        [str(point).strip() for point in key_points if str(point).strip()],
+        allow_points=is_llm_display_rewrite,
+    )
     banned_display_markers = [
         '值得关注', '更像一个近期升温的项目信号', '社区转发', '已引起关注', '如果后续还要继续保留', '最好补充 README',
         '更像一个社区讨论入口', '为什么会被开发者集中讨论'
     ]
-    key_points = [p for p in key_points if not any(marker in p for marker in banned_display_markers)]
-    key_points = [p for p in key_points if _is_clean_display_point(p)]
     if any(marker in why_it_matters for marker in banned_display_markers):
         why_it_matters = ''
+    if not summary_zh:
+        summary_zh = '这条内容等待最终成稿重写，当前页面已隐藏不可靠的旧摘要。'
 
     original_rank = int(item.get("rank", rank) or rank)
     return {
@@ -250,20 +260,92 @@ def _normalize_compare_text(text: str) -> str:
     return clean
 
 
+def _is_llm_display_rewrite(item: Dict[str, Any]) -> bool:
+    return str(item.get('display_rewrite_method') or '').strip() == 'llm_prompt' or str(item.get('content_basis') or '').strip() == 'display_rewrite_llm'
+
+
+def _is_clean_display_summary(text: str, item: Dict[str, Any]) -> bool:
+    summary = _plain_display_text(text)
+    if not _looks_like_good_chinese_summary(summary):
+        return False
+    if not _looks_like_content_summary(summary):
+        return False
+    if _looks_like_topic_mismatch(summary, item):
+        return False
+    if _is_generic_display_text(summary):
+        return False
+    return True
+
+
+def _clean_key_points_for_display(item: Dict[str, Any], summary: str, points: List[str], *, allow_points: bool) -> List[str]:
+    # Old non-LLM runs often stored raw page snippets or stale summaries in key_points.
+    if not allow_points:
+        return []
+    candidates = _dedupe_key_points(summary, points)
+    kept: List[str] = []
+    for point in candidates:
+        if not _is_clean_display_point(point):
+            continue
+        if _looks_like_topic_mismatch(point, item):
+            continue
+        if _is_generic_display_text(point):
+            continue
+        if not _looks_like_good_chinese_summary(point):
+            continue
+        kept.append(point)
+    return kept[:3]
+
+
 def _is_clean_display_point(text: str) -> bool:
-    point = str(text or '').strip()
+    point = _plain_display_text(text)
     if not point:
         return False
     dirty_markers = [
         'GitHub Reviewed', 'Published May', 'Updated May', 'Hacker News item score=', 'points by ', 'author=',
         'Navigation Menu', 'Sign in', 'Write better code with AI', 'Build and deploy intelligent apps',
-        'Manage and compare prompts', 'Instant dev environments', 'GitHub Advisory Database'
+        'Manage and compare prompts', 'Instant dev environments', 'GitHub Advisory Database',
+        'Benchmarks Nifty', 'FEATURED FUNDS', 'English Edition', "Today's ePaper",
+        '| Hacker News', 'opencode.ai', 'github.blog', 'CloudTech is part of',
+        'AT&T Room 641A', 'AT&amp;T Room 641A', 'Mark Klein', 'EFF', 'Motilal Oswal', 'Rate Story',
+        'OpenCode', 'Open source AI coding agent', 'GitHub Copilot Coding Agent',
+        'Cloud demand shifts toward AI as enterprise usage deepens',
     ]
     if any(marker in point for marker in dirty_markers):
         return False
     if len(re.findall(r'[A-Za-z]{4,}', point)) > 16 and len(re.findall(r'[\u4e00-\u9fff]', point)) < 20:
         return False
     return True
+
+
+def _is_generic_display_text(text: str) -> bool:
+    value = _plain_display_text(text)
+    generic_markers = [
+        '这条内容值得关注', '值得关注', '继续观察', '更适合作为背景信号',
+        '对应的是一个更具体的工程、产品或行业变化', '这是一条 GitHub 安全公告，涉及 Strapi。公告指出相关组件可能存在权限绕过、敏感信息暴露或配置保护不足等风险',
+        '原始问题描述：', '当前只拿到了外部搜索结果和讨论页片段', '需要确认版本范围、修复版本和是否存在实际暴露面',
+    ]
+    return any(marker in value for marker in generic_markers)
+
+
+def _looks_like_topic_mismatch(text: str, item: Dict[str, Any]) -> bool:
+    output = _plain_display_text(text).lower()
+    source = ' '.join([
+        str(item.get('title') or ''),
+        str(item.get('title_zh') or ''),
+        str(item.get('url') or ''),
+        str(item.get('body_text_clean') or '')[:1200],
+        str(item.get('body_text') or '')[:1200],
+    ]).lower()
+    marker_groups = [
+        (['odoh', 'oblivious dns', 'anonymous dns', 'dns relay', 'numa'], ['at&t', 'room 641a', 'mark klein', 'eff']),
+        (['claude for small business', 'anthropic.com/news/claude-for-small-business'], ['at&t', 'room 641a', 'mark klein', 'eff']),
+        (['strapi', 'cve-2026-22599', 'content type builder'], ['mistune', 'sharpcompress', 'ultrajson', 'lemmy']),
+    ]
+    return any(any(marker in source for marker in source_markers) and any(marker in output for marker in wrong_markers) for source_markers, wrong_markers in marker_groups)
+
+
+def _plain_display_text(text: str) -> str:
+    return html.unescape(str(text or '')).replace('\u00a0', ' ').strip()
 
 
 def _dedupe_key_points(summary: str, points: List[str]) -> List[str]:
@@ -358,6 +440,7 @@ def _pick_clean_display_summary(item: Dict[str, Any], lead_mode: bool = False) -
     editorial_hint = str(item.get('editorial_summary_hint') or '').strip()
     summary_zh = str(item.get('summary_zh') or '').strip()
     summary_en = str(item.get('summary_en') or item.get('summary') or '').strip()
+    is_llm_display_rewrite = _is_llm_display_rewrite(item)
     key_points = item.get('key_points') or []
     if not isinstance(key_points, list):
         key_points = []
@@ -367,13 +450,14 @@ def _pick_clean_display_summary(item: Dict[str, Any], lead_mode: bool = False) -
         value = str(value).strip()
         if value:
             candidates.append(value)
-    for point in key_points:
-        point_text = str(point).strip()
-        if point_text:
-            candidates.append(point_text)
+    if is_llm_display_rewrite:
+        for point in key_points:
+            point_text = str(point).strip()
+            if point_text:
+                candidates.append(point_text)
 
     for candidate in candidates:
-        if _looks_like_good_chinese_summary(candidate) and _looks_like_content_summary(candidate):
+        if _is_clean_display_summary(candidate, item):
             return candidate
 
     fallback = _summary_zh(
@@ -384,10 +468,10 @@ def _pick_clean_display_summary(item: Dict[str, Any], lead_mode: bool = False) -
         str(item.get('channel') or ''),
         item,
     ).strip()
-    if _looks_like_content_summary(fallback):
+    if is_llm_display_rewrite and _is_clean_display_summary(fallback, item):
         return fallback if not lead_mode else _trim_text(fallback, 140)
 
-    return '这条内容的原始摘要质量不足，页面已暂时回退为更保守的中文概述。'
+    return '这条内容等待最终成稿重写，当前页面已隐藏不可靠的旧摘要。'
 
 
 def _hackernews_summary_zh(title: str, body_text: str) -> str:

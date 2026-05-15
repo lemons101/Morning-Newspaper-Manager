@@ -12,7 +12,9 @@ RUNTIME = PROJECT_ROOT / 'runtime'
 CHECKS = [
     ('top10_items', RUNTIME / 'top10_items.json'),
     ('top10_enriched_items', RUNTIME / 'top10_enriched_items.json'),
+    ('top10_editorial_ready_base', RUNTIME / 'top10_editorial_ready_base.json'),
     ('top10_editorial_ready', RUNTIME / 'top10_editorial_ready.json'),
+    ('final_newspaper_base', RUNTIME / 'final_newspaper_base.json'),
     ('final_newspaper', RUNTIME / 'final_newspaper.json'),
     ('dashboard', RUNTIME / 'dashboard.html'),
 ]

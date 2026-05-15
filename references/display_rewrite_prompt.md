@@ -16,6 +16,20 @@
 }
 ```
 
+## 硬性优先级
+
+1. **事实优先级：title / url / body_text > source_type / source_name > 旧摘要字段。**
+   输入里的 `summary_main_existing_untrusted`、`why_it_matters_existing_untrusted`、`key_points_existing_untrusted` 只能当参考，不能直接照抄；只要它们和标题、链接或正文不一致，必须丢弃并重写。
+
+2. **宁可少写要点，也不能补脏要点。**
+   `display_points` 不是必填装饰；没有干净、具体、中文的新信息时，输出空数组 `[]`。禁止把 Hacker News 标题行、评论数、points、作者、网页导航、财经行情、基金榜单、站点页眉页脚放进 `display_points`。
+
+3. **不得跨条目串事实。**
+   不要把另一条新闻里的主体、人物、公司、漏洞或历史事件写进当前条目。比如 ODoH / anonymous DNS relay 不能写成 AT&T Room 641A / Mark Klein / EFF；Claude for Small Business 不能混入与小企业产品无关的监听历史内容。
+
+4. **材料不足时要保守但具体。**
+   如果正文不足，只基于标题、链接域名和可确认信息写清“这条是什么”，不要编造细节，也不要用“值得关注”“社区热议”“近期升温”这类空话顶上。
+
 ## 写作要求
 
 1. **先讲内容，再讲意义**
@@ -44,6 +58,7 @@
    - 风险点
    - 直接后果
    - 修复/核查动作
+   - 如果标题或正文已经给出具体漏洞类型，要写具体漏洞类型；不要统一写成“权限绕过、敏感信息暴露或配置保护不足”。
 
 5. **项目类**
    要写清：
@@ -58,9 +73,7 @@
    - 不要只写“热议”
 
 7. **非 AI 主线条目**
-   如果一条内容本身更像宏观背景、监管背景、弱相关行业资讯，并不适合进 Top10 主展示区，可以：
-   - `drop_recommended=true`
-   - 并给出一句简短理由
+   如果一条内容本身更像宏观背景、监管背景、弱相关行业资讯，并不适合进 Top10 主展示区，本项目正式输出仍然要求 `drop_recommended=false`；请在 `display_summary` 里用一句话说明它为什么更像边缘信号，而不是把它写成核心 AI 进展。
 
 ## 不合格示例
 
@@ -69,6 +82,9 @@
 - 这是一个近期升温的开源项目。
 - 这条美联储公告属于背景信号。
 - GitHub Reviewed Published May 6, 2026 ...
+- OpenCode – Open source AI coding agent | Hacker News ... 1274 points ...
+- Benchmarks Nifty 23,379.55 ... FEATURED FUNDS ...
+- 这是一条 GitHub 安全公告，涉及 Strapi。公告指出相关组件可能存在权限绕过、敏感信息暴露或配置保护不足等风险。
 
 ## 合格风格示例
 

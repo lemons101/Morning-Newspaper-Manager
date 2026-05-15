@@ -32,22 +32,22 @@ def run_newspaper_writer(root: Path) -> Path:
         'items': editorial_top10,
     }
 
-    editorial_path = runtime / 'top10_editorial_ready.json'
-    editorial_path.write_text(json.dumps(editorial_payload, ensure_ascii=False, indent=2), encoding='utf-8')
+    base_editorial_path = runtime / 'top10_editorial_ready_base.json'
+    base_editorial_path.write_text(json.dumps(editorial_payload, ensure_ascii=False, indent=2), encoding='utf-8')
 
     payload = _build_fallback_newspaper(editorial_top10)
     payload.update({
         'generated_at': _now_iso(),
         'source_count': len(editorial_top10),
         'items_used': [item.get('item_id', '') for item in editorial_top10],
-        'generation_mode': 'editorial_ready_fallback',
+        'generation_mode': 'editorial_ready_fallback_base',
     })
 
-    out_json = runtime / 'final_newspaper.json'
+    base_out_json = runtime / 'final_newspaper_base.json'
     out_md = runtime / 'final_newspaper.md'
-    out_json.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
+    base_out_json.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
     out_md.write_text(_render_markdown(payload), encoding='utf-8')
-    return editorial_path
+    return base_editorial_path
 
 
 def _read_items(path: Path) -> List[Dict[str, Any]]:
@@ -112,6 +112,8 @@ def _build_editorial_top10(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         existing_summary_main = str(item.get('summary_main') or '').strip()
         why = str(item.get('why_it_matters') or '').strip()
         summary_basis = str(item.get('summary_basis') or item.get('content_basis') or '').strip()
+        summary_zh = _discard_cross_item_contamination(raw_title, body, summary_zh)
+        existing_summary_main = _discard_cross_item_contamination(raw_title, body, existing_summary_main)
 
         editorial_focus = _editorial_focus(raw_title, source_type, source_name, body)
         editorial_summary_hint = _editorial_summary_hint(raw_title, source_type, source_name, body, summary_zh)
@@ -137,6 +139,13 @@ def _build_editorial_top10(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             summary_main = _safe_clean_summary_fallback(raw_title, source_type, source_name, body, summary_zh, editorial_summary_hint)
         if not (existing_summary_main and _is_publishable_chinese_summary(existing_summary_main)) and _should_force_clean_fallback(source_type, body_quality, summary_basis, summary_main, editorial_summary_hint):
             summary_main = _safe_clean_summary_fallback(raw_title, source_type, source_name, body, summary_zh, editorial_summary_hint)
+        summary_main = _discard_cross_item_contamination(raw_title, body, summary_main) or _safe_clean_summary_fallback(raw_title, source_type, source_name, body, summary_zh, editorial_summary_hint)
+        normalized_summary_zh = _discard_cross_item_contamination(raw_title, body, normalized_summary_zh) or summary_main
+        why_main = _discard_cross_item_contamination(raw_title, body, why_main) or _normalize_why_it_matters('', raw_title, source_type, source_name, body, body_quality, summary_basis=summary_basis)
+        key_points = [point for point in key_points if _discard_cross_item_contamination(raw_title, body, point)]
+        if not key_points:
+            key_points = _build_key_points(raw_title, source_type, source_name, body, summary_main, summary_basis=summary_basis, body_quality=body_quality)
+            key_points = [point for point in key_points if _discard_cross_item_contamination(raw_title, body, point)]
         editorial_items.append({
             'rank': idx,
             'item_id': item_id,
@@ -265,6 +274,27 @@ def _clean_body(text: str) -> str:
     text = re.sub(r'https?://\S+', ' ', text)
     text = re.sub(r'\s+', ' ', text)
     return text.strip()
+
+
+def _discard_cross_item_contamination(title: str, body: str, text: str) -> str:
+    value = str(text or '').strip()
+    if not value:
+        return ''
+    source = f'{title} {body}'.lower()
+    output = value.lower()
+    groups = [
+        (['odoh', 'oblivious dns', 'anonymous dns', 'dns relay', 'numa'], ['at&t', 'room 641a', 'mark klein', 'eff']),
+        (['claude for small business', 'anthropic.com/news/claude-for-small-business'], ['at&t', 'room 641a', 'mark klein', 'eff']),
+        (['strapi', 'cve-2026-22599', 'content type builder'], ['mistune', 'sharpcompress', 'ultrajson', 'lemmy']),
+        (['opencode'], ['copilot coding agent', 'claude for small business', 'aws revenue']),
+        (['copilot'], ['opencode', 'claude for small business']),
+    ]
+    if any(any(marker in source for marker in source_markers) and any(marker in output for marker in wrong_markers) for source_markers, wrong_markers in groups):
+        return ''
+    unrelated_fragments = ['benchmarks nifty', 'motilal oswal', 'rate story']
+    if any(marker in output for marker in unrelated_fragments) and not any(marker in source for marker in unrelated_fragments):
+        return ''
+    return value
 
 
 def _assess_body_quality(body: str, item: Dict[str, Any]) -> str:
